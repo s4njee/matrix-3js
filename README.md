@@ -4,6 +4,8 @@ This is a React Three Fiber project that recreates the digital rain effect from 
 
 It runs as a Vite app using React and TypeScript, with the scene rendered through `@react-three/fiber` and Three.js.
 
+The active app entrypoint is wired to the code in `src/text-rain`, which contains the Matrix digital rain implementation currently used by the project.
+
 ## Run the dev server
 
 1. Install dependencies:

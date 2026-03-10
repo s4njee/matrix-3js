@@ -1,23 +1,21 @@
 # text-rain
 
-This folder preserves the **3D text-object Matrix rain** experiment.
+This folder contains the active **3D text-object Matrix rain** implementation used by the app.
 
-It is **not wired into the main app right now**. The current app uses the faster canvas-texture approach in `src/MatrixRain.tsx`.
+The current Vite entrypoint imports `src/text-rain/App.tsx` from `src/main.tsx`, so this directory is what powers the Matrix digital rain scene right now.
 
 ## Files
 
 - `App.tsx` — scene setup for the text-based version
 - `MatrixRain.tsx` — true 3D rain using lots of `drei <Text>` objects
 
-## To try it later
+## Entry point
 
-Temporarily edit `src/main.tsx` or `src/App.tsx` to import from this folder instead, for example:
+The app is currently started with this import in `src/main.tsx`:
 
 ```ts
 import App from './text-rain/App'
 ```
-
-Then switch back when you're done.
 
 ## Caveat
 
