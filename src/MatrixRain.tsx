@@ -35,7 +35,9 @@ function createDrop(x: number, rows: number, speedMultiplier: number): Drop {
   const length = Math.floor(rand(18, 44))
   return {
     x,
-    head: Math.floor(rand(-rows * 0.25, rows)),
+    // Start each column at a much more random point in its lifecycle so
+    // lines don't enter the screen in broad synchronized waves.
+    head: Math.floor(rand(-rows * 1.5, rows + length)),
     speed: rand(0.18, 0.55) * speedMultiplier,
     length,
     chars: Array.from({ length }, pick),
@@ -139,7 +141,7 @@ export default function MatrixRain({
       }
 
       if (drop.head - drop.length > rows) {
-        drop.head = rand(-rows * 0.35, -4)
+        drop.head = rand(-rows * 1.25, -4)
         drop.speed = rand(0.18, 0.55) * speedMultiplier
         drop.length = Math.floor(rand(18, 44))
         drop.chars = Array.from({ length: drop.length }, pick)
