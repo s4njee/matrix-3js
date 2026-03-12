@@ -13,7 +13,7 @@ const ATLAS_ROWS = Math.ceil(CHAR_COUNT / ATLAS_COLS)
 const CELL_PX = 64
 
 // ── Simulation config ─────────────────────────────────────────────
-const COLUMN_COUNT = 2000
+const COLUMN_COUNT = 8000
 const ROWS = 150
 const MAX_INSTANCES = COLUMN_COUNT * ROWS
 const ROW_SPACING = 0.09
@@ -139,10 +139,15 @@ function resetCol(c: Col) {
   c.acc = 0; c.cells = freshCells()
 }
 
+const DEFAULT_ACTIVE_COLUMNS = 2000
+const MIN_ACTIVE_COLUMNS = 250
+const ACTIVE_COLUMN_STEP = 250
+
 // ── Component ─────────────────────────────────────────────────────
 export default function MatrixRain() {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const timeRef = useRef(0)
+  const activeColumnsRef = useRef(DEFAULT_ACTIVE_COLUMNS)
 
   const atlas = useMemo(buildAtlas, [])
   const columns = useMemo(() => Array.from({ length: COLUMN_COUNT }, makeCol), [])
@@ -186,6 +191,35 @@ export default function MatrixRain() {
     return () => { atlas.dispose(); material.dispose(); geometry.dispose() }
   }, [atlas, material, geometry])
 
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.repeat) return
+
+      const key = event.key.toLowerCase()
+
+      if (key === 'x') {
+        activeColumnsRef.current = Math.max(
+          MIN_ACTIVE_COLUMNS,
+          activeColumnsRef.current - ACTIVE_COLUMN_STEP,
+        )
+        return
+      }
+
+      if (key === 'c') {
+        activeColumnsRef.current = Math.min(
+          COLUMN_COUNT,
+          activeColumnsRef.current + ACTIVE_COLUMN_STEP,
+        )
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
+
   useFrame((_, dt) => {
     const m = meshRef.current
     if (!m) return
@@ -194,11 +228,38 @@ export default function MatrixRain() {
     const t = timeRef.current
     const { uv, col, opa } = bufs
     const matArr = m.instanceMatrix.array as Float32Array
+    const activeColumns = activeColumnsRef.current
 
     let idx = 0
 
     for (let i = 0; i < COLUMN_COUNT; i++) {
       const c = columns[i]
+      const columnIsActive = i < activeColumns
+
+      if (!columnIsActive) {
+        for (let r = 0; r < ROWS; r++) {
+          const off = idx * 16
+          matArr[off] = 0
+          matArr[off + 1] = 0
+          matArr[off + 2] = 0
+          matArr[off + 3] = 0
+          matArr[off + 4] = 0
+          matArr[off + 5] = 0
+          matArr[off + 6] = 0
+          matArr[off + 7] = 0
+          matArr[off + 8] = 0
+          matArr[off + 9] = 0
+          matArr[off + 10] = 0
+          matArr[off + 11] = 0
+          matArr[off + 12] = 0
+          matArr[off + 13] = 0
+          matArr[off + 14] = 0
+          matArr[off + 15] = 1
+          opa[idx] = 0
+          idx++
+        }
+        continue
+      }
 
       // ── Simulate ──
       c.acc += c.speed * dt
