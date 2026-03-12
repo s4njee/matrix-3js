@@ -6,6 +6,8 @@ It runs as a Vite app using React and TypeScript, with the scene rendered throug
 
 The active app entrypoint is wired to the code in `src/text-rain`, which contains the Matrix digital rain implementation currently used by the project.
 
+Live demo: https://s4njee.github.io/matrix-3js/
+
 ## Run the dev server
 
 1. Install dependencies:
