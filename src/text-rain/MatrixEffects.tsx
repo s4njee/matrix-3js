@@ -3,31 +3,17 @@ import type { Dispatch, SetStateAction } from 'react'
 import GUI from 'lil-gui'
 import {
   SharedEffectStack,
-  type SharedFxMode,
   SHARED_FX_CINEMATIC,
   SHARED_FX_DATABEND,
   isEditableTarget,
+  type SharedSpecialEffectState,
 } from '../../../../src/shared/special-effects/index.ts'
 import type { MatrixEffectSettings } from './matrix-effects-config'
-
-interface MatrixSpecialEffects {
-  chromaticAberrationEnabled: boolean
-  currentFx: SharedFxMode
-  hue: number
-  hueCycleBaseHue: number
-  hueCycleEnabled: boolean
-  hueCycleStartTime: number
-  hueSatEnabled: boolean
-  pixelMosaicEnabled: boolean
-  saturation: number
-  thermalVisionEnabled: boolean
-  xrayMode: boolean
-}
 
 interface MatrixEffectsProps {
   effectSettings: MatrixEffectSettings
   setEffectSettings: Dispatch<SetStateAction<MatrixEffectSettings>>
-  specialEffects: MatrixSpecialEffects
+  specialEffects: SharedSpecialEffectState
 }
 
 export default function MatrixEffects({
@@ -132,6 +118,8 @@ export default function MatrixEffects({
   }, [effectSettings])
 
   return (
+    // Keep the effect stack declarative here so MatrixRain itself only worries
+    // about simulation and geometry.
     <SharedEffectStack
       barrelBlurAmount={effectSettings.barrelBlurAmount}
       bloomEnabled={effectSettings.bloomEnabled}

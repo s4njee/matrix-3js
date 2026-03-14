@@ -143,6 +143,95 @@ const DEFAULT_ACTIVE_COLUMNS = 2000
 const MIN_ACTIVE_COLUMNS = 250
 const ACTIVE_COLUMN_STEP = 250
 
+function clampActiveColumnCount(nextCount: number) {
+  return Math.min(COLUMN_COUNT, Math.max(MIN_ACTIVE_COLUMNS, nextCount))
+}
+
+function writeHiddenInstance(
+  matrixArray: Float32Array,
+  opacityArray: Float32Array,
+  index: number,
+) {
+  const off = index * 16
+  matrixArray[off] = 0
+  matrixArray[off + 1] = 0
+  matrixArray[off + 2] = 0
+  matrixArray[off + 3] = 0
+  matrixArray[off + 4] = 0
+  matrixArray[off + 5] = 0
+  matrixArray[off + 6] = 0
+  matrixArray[off + 7] = 0
+  matrixArray[off + 8] = 0
+  matrixArray[off + 9] = 0
+  matrixArray[off + 10] = 0
+  matrixArray[off + 11] = 0
+  matrixArray[off + 12] = 0
+  matrixArray[off + 13] = 0
+  matrixArray[off + 14] = 0
+  matrixArray[off + 15] = 1
+  opacityArray[index] = 0
+}
+
+function writeVisibleInstanceMatrix(
+  matrixArray: Float32Array,
+  index: number,
+  scale: number,
+  x: number,
+  y: number,
+  z: number,
+) {
+  const off = index * 16
+  matrixArray[off] = scale
+  matrixArray[off + 1] = 0
+  matrixArray[off + 2] = 0
+  matrixArray[off + 3] = 0
+  matrixArray[off + 4] = 0
+  matrixArray[off + 5] = scale
+  matrixArray[off + 6] = 0
+  matrixArray[off + 7] = 0
+  matrixArray[off + 8] = 0
+  matrixArray[off + 9] = 0
+  matrixArray[off + 10] = scale
+  matrixArray[off + 11] = 0
+  matrixArray[off + 12] = x
+  matrixArray[off + 13] = y
+  matrixArray[off + 14] = z
+  matrixArray[off + 15] = 1
+}
+
+function writeCellAtlasOffset(
+  uvArray: Float32Array,
+  index: number,
+  charIndex: number,
+) {
+  const atlasColumn = charIndex % ATLAS_COLS
+  const atlasRow = Math.floor(charIndex / ATLAS_COLS)
+  uvArray[index * 2] = atlasColumn / ATLAS_COLS
+  uvArray[index * 2 + 1] = 1 - (atlasRow + 1) / ATLAS_ROWS
+}
+
+function writeCellColorAndOpacity(
+  colorArray: Float32Array,
+  opacityArray: Float32Array,
+  index: number,
+  age: number,
+  trail: number,
+) {
+  const fade = 1 - age / trail
+
+  if (age === 0) {
+    colorArray[index * 3] = 0.95
+    colorArray[index * 3 + 1] = 1
+    colorArray[index * 3 + 2] = 0.95
+  } else {
+    colorArray[index * 3] = fade * 0.094
+    colorArray[index * 3 + 1] = (95 + fade * 160) / 255
+    colorArray[index * 3 + 2] = fade * 0.078
+  }
+
+  opacityArray[index] = 0.16 + fade * 0.84
+}
+
 // ── Component ─────────────────────────────────────────────────────
 export default function MatrixRain() {
   const meshRef = useRef<THREE.InstancedMesh>(null)
@@ -196,16 +285,14 @@ export default function MatrixRain() {
       if (event.repeat) return
 
       if (event.key === 'ArrowLeft') {
-        activeColumnsRef.current = Math.max(
-          MIN_ACTIVE_COLUMNS,
+        activeColumnsRef.current = clampActiveColumnCount(
           activeColumnsRef.current - ACTIVE_COLUMN_STEP,
         )
         return
       }
 
       if (event.key === 'ArrowRight') {
-        activeColumnsRef.current = Math.min(
-          COLUMN_COUNT,
+        activeColumnsRef.current = clampActiveColumnCount(
           activeColumnsRef.current + ACTIVE_COLUMN_STEP,
         )
       }
@@ -235,31 +322,15 @@ export default function MatrixRain() {
       const columnIsActive = i < activeColumns
 
       if (!columnIsActive) {
+        // Inactive columns still reserve instance slots, so hide their cells explicitly.
         for (let r = 0; r < ROWS; r++) {
-          const off = idx * 16
-          matArr[off] = 0
-          matArr[off + 1] = 0
-          matArr[off + 2] = 0
-          matArr[off + 3] = 0
-          matArr[off + 4] = 0
-          matArr[off + 5] = 0
-          matArr[off + 6] = 0
-          matArr[off + 7] = 0
-          matArr[off + 8] = 0
-          matArr[off + 9] = 0
-          matArr[off + 10] = 0
-          matArr[off + 11] = 0
-          matArr[off + 12] = 0
-          matArr[off + 13] = 0
-          matArr[off + 14] = 0
-          matArr[off + 15] = 1
-          opa[idx] = 0
+          writeHiddenInstance(matArr, opa, idx)
           idx++
         }
         continue
       }
 
-      // ── Simulate ──
+      // Advance the column head and age the trail before writing GPU data.
       c.acc += c.speed * dt
       while (c.acc >= 1) {
         c.acc -= 1
@@ -285,46 +356,20 @@ export default function MatrixRain() {
       const s = c.size
 
       for (let r = 0; r < ROWS; r++) {
-        const off = idx * 16
         const cell = c.cells[r]
 
         if (!cell.on) {
-          // Degenerate matrix (scale 0) — GPU skips it
-          matArr[off]      = 0; matArr[off + 1]  = 0; matArr[off + 2]  = 0; matArr[off + 3]  = 0
-          matArr[off + 4]  = 0; matArr[off + 5]  = 0; matArr[off + 6]  = 0; matArr[off + 7]  = 0
-          matArr[off + 8]  = 0; matArr[off + 9]  = 0; matArr[off + 10] = 0; matArr[off + 11] = 0
-          matArr[off + 12] = 0; matArr[off + 13] = 0; matArr[off + 14] = 0; matArr[off + 15] = 1
-          opa[idx] = 0
+          writeHiddenInstance(matArr, opa, idx)
         } else {
-          // Scale + translate matrix (no rotation)
-          matArr[off]      = s; matArr[off + 1]  = 0; matArr[off + 2]  = 0; matArr[off + 3]  = 0
-          matArr[off + 4]  = 0; matArr[off + 5]  = s; matArr[off + 6]  = 0; matArr[off + 7]  = 0
-          matArr[off + 8]  = 0; matArr[off + 9]  = 0; matArr[off + 10] = s; matArr[off + 11] = 0
-          matArr[off + 12] = cx; matArr[off + 13] = BASE_Y - r * ROW_SPACING; matArr[off + 14] = c.z; matArr[off + 15] = 1
-
-          // Atlas UV offset
-          const ac = cell.ci % ATLAS_COLS
-          const ar = Math.floor(cell.ci / ATLAS_COLS)
-          uv[idx * 2]     = ac / ATLAS_COLS
-          uv[idx * 2 + 1] = 1 - (ar + 1) / ATLAS_ROWS
-
-          // Color + opacity
-          const fade = 1 - cell.age / c.trail
-          if (cell.age === 0) {
-            col[idx * 3]     = 0.95
-            col[idx * 3 + 1] = 1.0
-            col[idx * 3 + 2] = 0.95
-          } else {
-            col[idx * 3]     = fade * 0.094
-            col[idx * 3 + 1] = (95 + fade * 160) / 255
-            col[idx * 3 + 2] = fade * 0.078
-          }
-          opa[idx] = 0.16 + fade * 0.84
+          writeVisibleInstanceMatrix(matArr, idx, s, cx, BASE_Y - r * ROW_SPACING, c.z)
+          writeCellAtlasOffset(uv, idx, cell.ci)
+          writeCellColorAndOpacity(col, opa, idx, cell.age, c.trail)
         }
         idx++
       }
     }
 
+    // Mark the instanced attributes dirty only once after the full simulation/upload pass.
     m.instanceMatrix.needsUpdate = true
     ;(geometry.getAttribute('aUvOff') as THREE.InstancedBufferAttribute).needsUpdate = true
     ;(geometry.getAttribute('aCol')   as THREE.InstancedBufferAttribute).needsUpdate = true

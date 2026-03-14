@@ -5,100 +5,24 @@ import MatrixRain from './MatrixRain'
 import MatrixEffects from './MatrixEffects'
 import { MATRIX_EFFECT_DEFAULTS } from './matrix-effects-config'
 import {
+  createInitialSharedSpecialEffectState,
   createSharedEffectHotkeyListener,
-  type SharedFxMode,
-  SHARED_FX_CINEMATIC,
-  SHARED_FX_DATABEND,
-  SHARED_FX_NONE,
-  toggleChromaticAberrationState,
-  toggleHueCycleState,
-  toggleSharedFxMode,
-  toggleXrayModeState,
+  createSharedSpecialEffectHandlers,
+  type SharedSpecialEffectState,
 } from '../../../../src/shared/special-effects/index.ts'
-
-interface MatrixSpecialEffectsState {
-  chromaticAberrationEnabled: boolean
-  currentFx: SharedFxMode
-  hue: number
-  hueCycleBaseHue: number
-  hueCycleEnabled: boolean
-  hueCycleSavedEnabled: boolean
-  hueCycleSavedHue: number
-  hueCycleSavedSaturation: number
-  hueCycleStartTime: number
-  hueSatEnabled: boolean
-  pixelMosaicEnabled: boolean
-  restoreChromaticAfterXray: boolean
-  saturation: number
-  thermalVisionEnabled: boolean
-  xrayMode: boolean
-}
 
 export default function App() {
   const [effectSettings, setEffectSettings] = useState(MATRIX_EFFECT_DEFAULTS)
-  const [specialEffects, setSpecialEffects] = useState<MatrixSpecialEffectsState>({
-    chromaticAberrationEnabled: false,
-    currentFx: SHARED_FX_NONE,
-    hue: 0,
-    hueCycleBaseHue: 0,
-    hueCycleEnabled: false,
-    hueCycleSavedEnabled: false,
-    hueCycleSavedHue: 0,
-    hueCycleSavedSaturation: 0,
-    hueCycleStartTime: 0,
-    hueSatEnabled: false,
-    pixelMosaicEnabled: false,
-    restoreChromaticAfterXray: false,
-    saturation: 0,
-    thermalVisionEnabled: false,
-    xrayMode: false,
-  })
+  const [specialEffects, setSpecialEffects] = useState<SharedSpecialEffectState>(() => (
+    createInitialSharedSpecialEffectState()
+  ))
 
   useEffect(() => {
-    const onKeyDown = createSharedEffectHotkeyListener({
-      cinematic: () => {
-        setSpecialEffects((current) => ({
-          ...current,
-          currentFx: toggleSharedFxMode(current.currentFx, SHARED_FX_CINEMATIC),
-        }))
-      },
-      chromaticAberration: () => {
-        setSpecialEffects((current) => ({
-          ...current,
-          ...toggleChromaticAberrationState(current),
-        }))
-      },
-      databend: () => {
-        setSpecialEffects((current) => ({
-          ...current,
-          currentFx: toggleSharedFxMode(current.currentFx, SHARED_FX_DATABEND),
-        }))
-      },
-      hueCycle: () => {
-        setSpecialEffects((current) => ({
-          ...current,
-          ...toggleHueCycleState(current, performance.now() / 1000),
-        }))
-      },
-      pixelMosaic: () => {
-        setSpecialEffects((current) => ({
-          ...current,
-          pixelMosaicEnabled: !current.pixelMosaicEnabled,
-        }))
-      },
-      thermalVision: () => {
-        setSpecialEffects((current) => ({
-          ...current,
-          thermalVisionEnabled: !current.thermalVisionEnabled,
-        }))
-      },
-      xrayMode: () => {
-        setSpecialEffects((current) => ({
-          ...current,
-          ...toggleXrayModeState(current),
-        }))
-      },
-    })
+    // Matrix uses the same post-processing hotkeys as the other scenes, so the
+    // shared helper can own the state transitions and keep this shell minimal.
+    const onKeyDown = createSharedEffectHotkeyListener(
+      createSharedSpecialEffectHandlers(setSpecialEffects),
+    )
 
     window.addEventListener('keydown', onKeyDown)
 
@@ -114,6 +38,7 @@ export default function App() {
       camera={{ position: [0, 0, 12], fov: 55 }}
       style={{ background: '#000' }}
     >
+      {/* Scene content, controls, and post-processing stay as separate blocks so the render path is easy to scan. */}
       <fog attach="fog" args={['#000000', 8, 30]} />
 
       <MatrixRain />
