@@ -34,8 +34,8 @@ This version is much heavier at startup/performance because it creates a large n
 - `v` — toggle hue cycle
 - `b` — toggle pixel mosaic
 - `n` — toggle thermal vision
-- `[` — reduce active rain columns
-- `]` — increase active rain columns
+- `a` or `[` — reduce active rain columns
+- `s` or `]` — increase active rain columns
 
 ## More context
 
