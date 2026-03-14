@@ -14,7 +14,7 @@ import {
   toggleHueCycleState,
   toggleSharedFxMode,
   toggleXrayModeState,
-} from '../../../../src/shared/special-effects/shared-special-effects.ts'
+} from '../../../../src/shared/special-effects/index.ts'
 
 interface MatrixSpecialEffectsState {
   chromaticAberrationEnabled: boolean

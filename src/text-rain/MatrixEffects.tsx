@@ -1,13 +1,13 @@
 import { useEffect, useRef } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import GUI from 'lil-gui'
-import SharedEffectStack from '../../../../src/shared/special-effects/SharedEffectStack.tsx'
 import {
+  SharedEffectStack,
   type SharedFxMode,
   SHARED_FX_CINEMATIC,
   SHARED_FX_DATABEND,
   isEditableTarget,
-} from '../../../../src/shared/special-effects/shared-special-effects.ts'
+} from '../../../../src/shared/special-effects/index.ts'
 import type { MatrixEffectSettings } from './matrix-effects-config'
 
 interface MatrixSpecialEffects {
