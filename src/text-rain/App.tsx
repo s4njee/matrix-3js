@@ -1,102 +1,112 @@
-import { useEffect, useMemo, useRef } from 'react'
 import { Canvas } from '@react-three/fiber'
+import { useEffect, useState } from 'react'
 import { OrbitControls } from '@react-three/drei'
-import { Bloom, EffectComposer, Scanline } from '@react-three/postprocessing'
-import { BlendFunction, BloomEffect, ScanlineEffect } from 'postprocessing'
-import GUI from 'lil-gui'
 import MatrixRain from './MatrixRain'
-import { MonolithPixelGlitchEffect } from './MonolithPixelGlitchEffect'
+import MatrixEffects from './MatrixEffects'
+import { MATRIX_EFFECT_DEFAULTS } from './matrix-effects-config'
+import {
+  createSharedEffectHotkeyListener,
+  type SharedFxMode,
+  SHARED_FX_CINEMATIC,
+  SHARED_FX_DATABEND,
+  SHARED_FX_NONE,
+  toggleChromaticAberrationState,
+  toggleHueCycleState,
+  toggleSharedFxMode,
+  toggleXrayModeState,
+} from '../../../../src/shared/special-effects/shared-special-effects.ts'
 
-const effectParams = {
-  scanDensity: 4.1,
-  scanOpacity: 1.0,
-  scanEnabled: true,
-  bloomIntensity: 2.5,
-  bloomThreshold: 0,
-  bloomSmoothing: 0.9,
+interface MatrixSpecialEffectsState {
+  chromaticAberrationEnabled: boolean
+  currentFx: SharedFxMode
+  hue: number
+  hueCycleBaseHue: number
+  hueCycleEnabled: boolean
+  hueCycleSavedEnabled: boolean
+  hueCycleSavedHue: number
+  hueCycleSavedSaturation: number
+  hueCycleStartTime: number
+  hueSatEnabled: boolean
+  pixelMosaicEnabled: boolean
+  restoreChromaticAfterXray: boolean
+  saturation: number
+  thermalVisionEnabled: boolean
+  xrayMode: boolean
 }
 
-function Effects() {
-  const scanlineRef = useRef<ScanlineEffect | null>(null)
-  const bloomRef = useRef<BloomEffect | null>(null)
-  const glitchEffect = useMemo(() => new MonolithPixelGlitchEffect(), [])
+export default function App() {
+  const [effectSettings, setEffectSettings] = useState(MATRIX_EFFECT_DEFAULTS)
+  const [specialEffects, setSpecialEffects] = useState<MatrixSpecialEffectsState>({
+    chromaticAberrationEnabled: false,
+    currentFx: SHARED_FX_NONE,
+    hue: 0,
+    hueCycleBaseHue: 0,
+    hueCycleEnabled: false,
+    hueCycleSavedEnabled: false,
+    hueCycleSavedHue: 0,
+    hueCycleSavedSaturation: 0,
+    hueCycleStartTime: 0,
+    hueSatEnabled: false,
+    pixelMosaicEnabled: false,
+    restoreChromaticAfterXray: false,
+    saturation: 0,
+    thermalVisionEnabled: false,
+    xrayMode: false,
+  })
 
   useEffect(() => {
-    const gui = new GUI({ title: 'Effects', width: 280 })
-    gui.domElement.style.zIndex = '20'
-    gui.hide()
-
-    const scanFolder = gui.addFolder('Scanlines')
-    scanFolder.add(effectParams, 'scanEnabled').name('Enabled').onChange((v: boolean) => {
-      if (scanlineRef.current) scanlineRef.current.blendMode.setBlendFunction(
-        v ? BlendFunction.OVERLAY : BlendFunction.SKIP
-      )
+    const onKeyDown = createSharedEffectHotkeyListener({
+      cinematic: () => {
+        setSpecialEffects((current) => ({
+          ...current,
+          currentFx: toggleSharedFxMode(current.currentFx, SHARED_FX_CINEMATIC),
+        }))
+      },
+      chromaticAberration: () => {
+        setSpecialEffects((current) => ({
+          ...current,
+          ...toggleChromaticAberrationState(current),
+        }))
+      },
+      databend: () => {
+        setSpecialEffects((current) => ({
+          ...current,
+          currentFx: toggleSharedFxMode(current.currentFx, SHARED_FX_DATABEND),
+        }))
+      },
+      hueCycle: () => {
+        setSpecialEffects((current) => ({
+          ...current,
+          ...toggleHueCycleState(current, performance.now() / 1000),
+        }))
+      },
+      pixelMosaic: () => {
+        setSpecialEffects((current) => ({
+          ...current,
+          pixelMosaicEnabled: !current.pixelMosaicEnabled,
+        }))
+      },
+      thermalVision: () => {
+        setSpecialEffects((current) => ({
+          ...current,
+          thermalVisionEnabled: !current.thermalVisionEnabled,
+        }))
+      },
+      xrayMode: () => {
+        setSpecialEffects((current) => ({
+          ...current,
+          ...toggleXrayModeState(current),
+        }))
+      },
     })
-    scanFolder.add(effectParams, 'scanDensity', 0.1, 5, 0.05).name('Density').onChange((v: number) => {
-      if (scanlineRef.current) scanlineRef.current.density = v
-    })
-    scanFolder.add(effectParams, 'scanOpacity', 0, 1, 0.01).name('Opacity').onChange((v: number) => {
-      if (scanlineRef.current) scanlineRef.current.blendMode.opacity.value = v
-    })
-    scanFolder.open()
-
-    const bloomFolder = gui.addFolder('Bloom')
-    bloomFolder.add(effectParams, 'bloomIntensity', 0, 3, 0.01).name('Intensity').onChange((v: number) => {
-      if (bloomRef.current) bloomRef.current.intensity = v
-    })
-    bloomFolder.add(effectParams, 'bloomThreshold', 0, 1, 0.01).name('Threshold').onChange((v: number) => {
-      if (bloomRef.current) bloomRef.current.luminanceMaterial.threshold = v
-    })
-    bloomFolder.add(effectParams, 'bloomSmoothing', 0, 1, 0.01).name('Smoothing').onChange((v: number) => {
-      if (bloomRef.current) bloomRef.current.luminanceMaterial.smoothing = v
-    })
-    bloomFolder.open()
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase()
-
-      if (key === 'z' && !event.repeat) {
-        glitchEffect.trigger()
-        return
-      }
-
-      if (key === 'g' && !event.repeat) {
-        if (gui._hidden) {
-          gui.show()
-          return
-        }
-        gui.hide()
-      }
-    }
 
     window.addEventListener('keydown', onKeyDown)
 
     return () => {
       window.removeEventListener('keydown', onKeyDown)
-      gui.destroy()
     }
-  }, [glitchEffect])
+  }, [])
 
-  return (
-    <EffectComposer>
-      <Scanline
-        ref={scanlineRef}
-        blendFunction={effectParams.scanEnabled ? BlendFunction.OVERLAY : BlendFunction.SKIP}
-        density={effectParams.scanDensity}
-        opacity={effectParams.scanOpacity}
-      />
-      <Bloom
-        ref={bloomRef}
-        intensity={effectParams.bloomIntensity}
-        luminanceThreshold={effectParams.bloomThreshold}
-        luminanceSmoothing={effectParams.bloomSmoothing}
-      />
-      <primitive object={glitchEffect} />
-    </EffectComposer>
-  )
-}
-
-export default function App() {
   return (
     <Canvas
       dpr={2}
@@ -116,7 +126,11 @@ export default function App() {
         maxPolarAngle={(Math.PI * 2) / 3}
       />
 
-      <Effects />
+      <MatrixEffects
+        effectSettings={effectSettings}
+        setEffectSettings={setEffectSettings}
+        specialEffects={specialEffects}
+      />
     </Canvas>
   )
 }

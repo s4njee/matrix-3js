@@ -83,8 +83,9 @@ export default function MatrixRain({
 
   const drops = useRef<Drop[]>([])
   const frameRef = useRef(0)
+  const textureRef = useRef<THREE.CanvasTexture | null>(null)
 
-  useMemo(() => {
+  useEffect(() => {
     const seeded: Drop[] = []
     for (let i = 0; i < cols; i++) {
       if (Math.random() < density) seeded.push(createDrop(i, rows, speedMultiplier))
@@ -93,7 +94,14 @@ export default function MatrixRain({
   }, [cols, density, rows, speedMultiplier])
 
   useEffect(() => {
-    return () => texture.dispose()
+    textureRef.current = texture
+
+    return () => {
+      if (textureRef.current === texture) {
+        textureRef.current = null
+      }
+      texture.dispose()
+    }
   }, [texture])
 
   useFrame(() => {
@@ -149,7 +157,9 @@ export default function MatrixRain({
     }
 
     ctx.shadowBlur = 0
-    texture.needsUpdate = true
+    if (textureRef.current) {
+      textureRef.current.needsUpdate = true
+    }
   })
 
   return (

@@ -149,7 +149,7 @@ export default function MatrixRain() {
   const timeRef = useRef(0)
   const activeColumnsRef = useRef(DEFAULT_ACTIVE_COLUMNS)
 
-  const atlas = useMemo(buildAtlas, [])
+  const atlas = useMemo(() => buildAtlas(), [])
   const columns = useMemo(() => Array.from({ length: COLUMN_COUNT }, makeCol), [])
 
   // Pre-allocate typed arrays for instanced attributes
@@ -195,9 +195,7 @@ export default function MatrixRain() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return
 
-      const key = event.key.toLowerCase()
-
-      if (key === 'x') {
+      if (event.key === '[') {
         activeColumnsRef.current = Math.max(
           MIN_ACTIVE_COLUMNS,
           activeColumnsRef.current - ACTIVE_COLUMN_STEP,
@@ -205,7 +203,7 @@ export default function MatrixRain() {
         return
       }
 
-      if (key === 'c') {
+      if (event.key === ']') {
         activeColumnsRef.current = Math.min(
           COLUMN_COUNT,
           activeColumnsRef.current + ACTIVE_COLUMN_STEP,
