@@ -195,9 +195,7 @@ export default function MatrixRain() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return
 
-      const key = event.key.toLowerCase()
-
-      if (event.key === '[' || key === 'a') {
+      if (event.key === 'ArrowLeft') {
         activeColumnsRef.current = Math.max(
           MIN_ACTIVE_COLUMNS,
           activeColumnsRef.current - ACTIVE_COLUMN_STEP,
@@ -205,7 +203,7 @@ export default function MatrixRain() {
         return
       }
 
-      if (event.key === ']' || key === 's') {
+      if (event.key === 'ArrowRight') {
         activeColumnsRef.current = Math.min(
           COLUMN_COUNT,
           activeColumnsRef.current + ACTIVE_COLUMN_STEP,
