@@ -1,6 +1,6 @@
 # text-rain
 
-This folder contains the active **3D text-object Matrix rain** implementation used by the app.
+This folder contains the active **3D instanced Matrix rain** implementation used by the app.
 
 The current Vite entrypoint imports `src/text-rain/App.tsx` from `src/main.tsx`, so this directory is what powers the Matrix digital rain scene right now.
 
@@ -9,7 +9,7 @@ The current Vite entrypoint imports `src/text-rain/App.tsx` from `src/main.tsx`,
 - `App.tsx` — scene setup, shared hotkeys, and top-level special-effect state
 - `MatrixEffects.tsx` — lil-gui controls plus the shared post-processing stack bridge
 - `matrix-effects-config.ts` — defaults for Matrix-specific effect tuning
-- `MatrixRain.tsx` — true 3D rain using lots of text instances
+- `MatrixRain.tsx` — atlas-backed instanced glyph quads driven by a flat typed-array simulation
 - `MonolithPixelGlitchEffect.ts` — legacy custom effect class that is currently not wired into `App.tsx`
 
 ## Entry point
@@ -22,7 +22,7 @@ import App from './text-rain/App'
 
 ## Caveat
 
-This version is much heavier at startup/performance because it creates a large number of real text objects.
+This version is still performance-sensitive, but the active path no longer creates per-cell text objects. It uses one instanced mesh plus typed-array simulation buffers and only uploads the active column slice each frame.
 
 ## Hotkeys
 
@@ -34,8 +34,8 @@ This version is much heavier at startup/performance because it creates a large n
 - `v` — toggle hue cycle
 - `b` — toggle pixel mosaic
 - `n` — toggle thermal vision
-- `a` or `[` — reduce active rain columns
-- `s` or `]` — increase active rain columns
+- `ArrowLeft` — reduce active rain columns
+- `ArrowRight` — increase active rain columns
 
 ## More context
 

@@ -83,60 +83,108 @@ const FS = /* glsl */ `
   }
 `
 
-// ── Column simulation types ───────────────────────────────────────
-interface Cell {
-  ci: number   // char index
-  age: number
-  on: boolean
-}
-interface Col {
-  x: number; z: number; speed: number; size: number
-  phase: number; headY: number; trail: number
-  resetAfter: number
-  acc: number; cells: Cell[]
+// ── Column simulation state ───────────────────────────────────────
+interface SimulationState {
+  x: Float32Array
+  z: Float32Array
+  speed: Float32Array
+  size: Float32Array
+  phase: Float32Array
+  headY: Int16Array
+  trail: Uint8Array
+  resetAfter: Uint16Array
+  acc: Float32Array
+  cellOn: Uint8Array
+  cellAge: Uint8Array
+  cellChar: Uint8Array
 }
 
-function freshCells(): Cell[] {
-  return Array.from({ length: ROWS }, () => ({ ci: pickIdx(), age: 999, on: false }))
+// Keep the simulation indexed by column + row so the render loop can walk
+// contiguous typed arrays instead of nested JS objects.
+function getCellIndex(columnIndex: number, rowIndex: number) {
+  return columnIndex * ROWS + rowIndex
 }
 
-function randomHeadY(trail: number, includeVisibleRange = false) {
-  const min = includeVisibleRange ? -ROWS * 1.5 - trail : -Math.floor(rand(trail, trail + 40))
-  const max = includeVisibleRange ? ROWS + trail : -4
-  return Math.floor(rand(min, max))
+function initialHeadY(trail: number) {
+  return Math.floor(rand(-ROWS * 1.5 - trail, ROWS + trail))
+}
+
+function resetHeadY(trail: number) {
+  const min = -Math.floor(rand(trail, trail + 40))
+  return Math.floor(rand(min, -4))
 }
 
 function randomResetAfter() {
   return Math.floor(rand(120, 220))
 }
 
-function makeCol(): Col {
-  // Spread headY across the full range so columns are at different lifecycle stages
-  const trail = Math.floor(rand(22, 38))
-  const headY = randomHeadY(trail, true)
-  const c: Col = {
-    x: rand(-14, 14), z: rand(-12, 12),
-    speed: rand(10, 22), size: rand(0.1, 0.16),
-    phase: rand(0, Math.PI * 2),
-    headY, trail,
-    resetAfter: randomResetAfter(),
-    acc: 0, cells: freshCells(),
-  }
-  for (let j = 0; j < c.trail; j++) {
-    const r = c.headY - j
-    if (r >= 0 && r < ROWS) c.cells[r] = { ci: pickIdx(), age: j, on: true }
-  }
-  return c
+function clearColumnCells(state: SimulationState, columnIndex: number) {
+  const start = getCellIndex(columnIndex, 0)
+  const end = start + ROWS
+  state.cellOn.fill(0, start, end)
+  state.cellAge.fill(0, start, end)
 }
 
-function resetCol(c: Col) {
-  c.x = rand(-14, 14); c.z = rand(-12, 12)
-  c.speed = rand(10, 22); c.size = rand(0.1, 0.16)
-  c.phase = rand(0, Math.PI * 2)
-  c.trail = Math.floor(rand(22, 38))
-  c.headY = randomHeadY(c.trail)
-  c.resetAfter = randomResetAfter()
-  c.acc = 0; c.cells = freshCells()
+function seedColumn(
+  state: SimulationState,
+  columnIndex: number,
+  headY: number,
+  trail: number,
+) {
+  const start = getCellIndex(columnIndex, 0)
+
+  state.x[columnIndex] = rand(-14, 14)
+  state.z[columnIndex] = rand(-12, 12)
+  state.speed[columnIndex] = rand(10, 22)
+  state.size[columnIndex] = rand(0.1, 0.16)
+  state.phase[columnIndex] = rand(0, Math.PI * 2)
+  state.headY[columnIndex] = headY
+  state.trail[columnIndex] = trail
+  state.resetAfter[columnIndex] = randomResetAfter()
+  state.acc[columnIndex] = 0
+
+  clearColumnCells(state, columnIndex)
+
+  for (let j = 0; j < trail; j += 1) {
+    const row = headY - j
+    if (row < 0 || row >= ROWS) continue
+
+    const cellIndex = start + row
+    state.cellOn[cellIndex] = 1
+    state.cellAge[cellIndex] = j
+    state.cellChar[cellIndex] = pickIdx()
+  }
+}
+
+function createSimulationState(): SimulationState {
+  const state: SimulationState = {
+    x: new Float32Array(COLUMN_COUNT),
+    z: new Float32Array(COLUMN_COUNT),
+    speed: new Float32Array(COLUMN_COUNT),
+    size: new Float32Array(COLUMN_COUNT),
+    phase: new Float32Array(COLUMN_COUNT),
+    headY: new Int16Array(COLUMN_COUNT),
+    trail: new Uint8Array(COLUMN_COUNT),
+    resetAfter: new Uint16Array(COLUMN_COUNT),
+    acc: new Float32Array(COLUMN_COUNT),
+    cellOn: new Uint8Array(MAX_INSTANCES),
+    cellAge: new Uint8Array(MAX_INSTANCES),
+    cellChar: new Uint8Array(MAX_INSTANCES),
+  }
+
+  for (let columnIndex = 0; columnIndex < COLUMN_COUNT; columnIndex += 1) {
+    const trail = Math.floor(rand(22, 38))
+    seedColumn(state, columnIndex, initialHeadY(trail), trail)
+  }
+
+  return state
+}
+
+// Reset a column in place so the simulation can recycle its buffers without
+// allocating new cell objects or touching inactive columns.
+function resetColumn(state: SimulationState, columnIndex: number) {
+  const trail = Math.floor(rand(22, 38))
+  seedColumn(state, columnIndex, resetHeadY(trail), trail)
 }
 
 const DEFAULT_ACTIVE_COLUMNS = 2000
@@ -239,7 +287,7 @@ export default function MatrixRain() {
   const activeColumnsRef = useRef(DEFAULT_ACTIVE_COLUMNS)
 
   const atlas = useMemo(() => buildAtlas(), [])
-  const columns = useMemo(() => Array.from({ length: COLUMN_COUNT }, makeCol), [])
+  const state = useMemo(() => createSimulationState(), [])
 
   // Pre-allocate typed arrays for instanced attributes
   const bufs = useMemo(() => ({
@@ -312,68 +360,113 @@ export default function MatrixRain() {
     timeRef.current += dt
     const t = timeRef.current
     const { uv, col, opa } = bufs
+    const {
+      x,
+      z,
+      speed,
+      size,
+      phase,
+      headY,
+      trail,
+      resetAfter,
+      acc,
+      cellOn,
+      cellAge,
+      cellChar,
+    } = state
     const matArr = m.instanceMatrix.array as Float32Array
     const activeColumns = activeColumnsRef.current
+    const activeInstances = activeColumns * ROWS
+    const uvAttr = geometry.getAttribute('aUvOff') as THREE.InstancedBufferAttribute
+    const colAttr = geometry.getAttribute('aCol') as THREE.InstancedBufferAttribute
+    const opaAttr = geometry.getAttribute('aOpa') as THREE.InstancedBufferAttribute
+
+    // Only the active prefix is rendered, so the instanced mesh count follows
+    // the selected density instead of drawing the full backing buffer.
+    m.count = activeInstances
 
     let idx = 0
 
-    for (let i = 0; i < COLUMN_COUNT; i++) {
-      const c = columns[i]
-      const columnIsActive = i < activeColumns
+    for (let columnIndex = 0; columnIndex < activeColumns; columnIndex += 1) {
+      acc[columnIndex] += speed[columnIndex] * dt
 
-      if (!columnIsActive) {
-        // Inactive columns still reserve instance slots, so hide their cells explicitly.
-        for (let r = 0; r < ROWS; r++) {
-          writeHiddenInstance(matArr, opa, idx)
-          idx++
+      while (acc[columnIndex] >= 1) {
+        acc[columnIndex] -= 1
+        headY[columnIndex] += 1
+
+        const trailLength = trail[columnIndex]
+        const columnStart = getCellIndex(columnIndex, 0)
+        const columnEnd = columnStart + ROWS
+
+        for (let cellIndex = columnStart; cellIndex < columnEnd; cellIndex += 1) {
+          if (!cellOn[cellIndex]) continue
+
+          const nextAge = cellAge[cellIndex] + 1
+          if (nextAge > trailLength) {
+            cellOn[cellIndex] = 0
+            cellAge[cellIndex] = 0
+          } else {
+            cellAge[cellIndex] = nextAge
+          }
         }
-        continue
+
+        if (headY[columnIndex] >= 0 && headY[columnIndex] < ROWS) {
+          const headCellIndex = columnStart + headY[columnIndex]
+          cellOn[headCellIndex] = 1
+          cellAge[headCellIndex] = 0
+          cellChar[headCellIndex] = pickIdx()
+        }
+
+        // Only scramble glyphs when the head actually advances so we avoid
+        // burning Math.random() on frames where the column is stationary.
+        for (let k = 0; k < 2; k += 1) {
+          const rowIndex = Math.floor(rand(0, ROWS))
+          const cellIndex = columnStart + rowIndex
+          if (cellOn[cellIndex] && Math.random() < 0.5) cellChar[cellIndex] = pickIdx()
+        }
+
+        if (headY[columnIndex] - trailLength > ROWS + resetAfter[columnIndex]) {
+          resetColumn(state, columnIndex)
+          break
+        }
       }
 
-      // Advance the column head and age the trail before writing GPU data.
-      c.acc += c.speed * dt
-      while (c.acc >= 1) {
-        c.acc -= 1
-        c.headY += 1
-        for (let r = 0; r < ROWS; r++) {
-          const cell = c.cells[r]
-          if (!cell.on) continue
-          cell.age += 1
-          if (cell.age > c.trail) cell.on = false
-        }
-        if (c.headY >= 0 && c.headY < ROWS)
-          c.cells[c.headY] = { ci: pickIdx(), age: 0, on: true }
-        for (let k = 0; k < 2; k++) {
-          const ri = Math.floor(rand(0, ROWS))
-          const cell = c.cells[ri]
-          if (cell?.on && Math.random() < 0.5) cell.ci = pickIdx()
-        }
-        if (c.headY - c.trail > ROWS + c.resetAfter) resetCol(c)
-      }
+      // Write the visible slice for this column into the instanced buffers.
+      const cx = x[columnIndex] + Math.sin(t * 0.25 + phase[columnIndex]) * 0.03
+      const s = size[columnIndex]
+      const columnStart = getCellIndex(columnIndex, 0)
 
-      // ── Write per-cell instance data ──
-      const cx = c.x + Math.sin(t * 0.25 + c.phase) * 0.03
-      const s = c.size
+      for (let rowIndex = 0; rowIndex < ROWS; rowIndex += 1) {
+        const cellIndex = columnStart + rowIndex
 
-      for (let r = 0; r < ROWS; r++) {
-        const cell = c.cells[r]
-
-        if (!cell.on) {
+        if (!cellOn[cellIndex]) {
           writeHiddenInstance(matArr, opa, idx)
         } else {
-          writeVisibleInstanceMatrix(matArr, idx, s, cx, BASE_Y - r * ROW_SPACING, c.z)
-          writeCellAtlasOffset(uv, idx, cell.ci)
-          writeCellColorAndOpacity(col, opa, idx, cell.age, c.trail)
+          writeVisibleInstanceMatrix(matArr, idx, s, cx, BASE_Y - rowIndex * ROW_SPACING, z[columnIndex])
+          writeCellAtlasOffset(uv, idx, cellChar[cellIndex])
+          writeCellColorAndOpacity(col, opa, idx, cellAge[cellIndex], trail[columnIndex])
         }
-        idx++
+        idx += 1
       }
     }
 
-    // Mark the instanced attributes dirty only once after the full simulation/upload pass.
+    // Mark only the active slice dirty so Three uploads the minimum amount of
+    // per-instance data needed for the current density.
+    m.instanceMatrix.clearUpdateRanges()
+    m.instanceMatrix.addUpdateRange(0, activeInstances * 16)
     m.instanceMatrix.needsUpdate = true
-    ;(geometry.getAttribute('aUvOff') as THREE.InstancedBufferAttribute).needsUpdate = true
-    ;(geometry.getAttribute('aCol')   as THREE.InstancedBufferAttribute).needsUpdate = true
-    ;(geometry.getAttribute('aOpa')   as THREE.InstancedBufferAttribute).needsUpdate = true
+
+    uvAttr.clearUpdateRanges()
+    uvAttr.addUpdateRange(0, activeInstances * 2)
+    uvAttr.needsUpdate = true
+
+    colAttr.clearUpdateRanges()
+    colAttr.addUpdateRange(0, activeInstances * 3)
+    colAttr.needsUpdate = true
+
+    opaAttr.clearUpdateRanges()
+    opaAttr.addUpdateRange(0, activeInstances)
+    opaAttr.needsUpdate = true
   })
 
   return (

@@ -21,6 +21,9 @@ export default function MatrixEffects({
   setEffectSettings,
   specialEffects,
 }: MatrixEffectsProps) {
+  // lil-gui expects mutable objects, while React state wants immutable
+  // updates. Keep a live mirror here so the controls can read/write without
+  // forcing the GUI to be recreated on every settings change.
   const paramsRef = useRef({ ...effectSettings })
   const syncGuiDisplayRef = useRef(() => {})
 
@@ -119,7 +122,7 @@ export default function MatrixEffects({
 
   return (
     // Keep the effect stack declarative here so MatrixRain itself only worries
-    // about simulation and geometry.
+    // about simulation and geometry, while this bridge owns the post FX state.
     <SharedEffectStack
       barrelBlurAmount={effectSettings.barrelBlurAmount}
       bloomEnabled={effectSettings.bloomEnabled}
