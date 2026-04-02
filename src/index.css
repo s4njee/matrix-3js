@@ -9,3 +9,53 @@ html, body, #root {
   height: 100%;
   overflow: hidden;
 }
+
+body {
+  background: #010201;
+  color: #d7ffe0;
+  font-family: 'IBM Plex Mono', 'SFMono-Regular', 'Menlo', monospace;
+}
+
+.matrix-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at top, rgba(32, 120, 54, 0.18), transparent 38%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.28), rgba(0, 0, 0, 0.68));
+  position: absolute;
+  z-index: 10;
+}
+
+.matrix-status-chip {
+  top: 1rem;
+  left: 1rem;
+  display: flex;
+  gap: 0.9rem;
+  align-items: center;
+  border: 1px solid rgba(150, 255, 177, 0.24);
+  border-radius: 999px;
+  background: rgba(1, 6, 2, 0.72);
+  padding: 0.65rem 0.95rem;
+  color: rgba(215, 255, 224, 0.88);
+  backdrop-filter: blur(16px);
+}
+
+.matrix-status-chip span:last-child {
+  color: rgba(174, 255, 196, 0.68);
+}
+
+@media (max-width: 720px) {
+  .matrix-status-chip {
+    top: auto;
+    bottom: 1rem;
+  }
+
+  .matrix-status-chip {
+    left: 1rem;
+    right: 1rem;
+    gap: 0.55rem;
+    font-size: 0.78rem;
+    padding: 0.55rem 0.8rem;
+  }
+}

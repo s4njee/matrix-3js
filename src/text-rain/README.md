@@ -8,9 +8,8 @@ The current Vite entrypoint imports `src/text-rain/App.tsx` from `src/main.tsx`,
 
 - `App.tsx` — scene setup, shared hotkeys, and top-level special-effect state
 - `MatrixEffects.tsx` — lil-gui controls plus the shared post-processing stack bridge
-- `matrix-effects-config.ts` — defaults for Matrix-specific effect tuning
-- `MatrixRain.tsx` — atlas-backed instanced glyph quads driven by a flat typed-array simulation
-- `MonolithPixelGlitchEffect.ts` — legacy custom effect class that is currently not wired into `App.tsx`
+- `matrix-effects-config.ts` — defaults for Matrix-specific effect tuning and palette presets
+- `MatrixRain.tsx` — atlas-backed instanced glyph quads driven by a flat typed-array simulation and theme-aware glyph colors
 
 ## Entry point
 
@@ -27,6 +26,7 @@ This version is still performance-sensitive, but the active path no longer creat
 ## Hotkeys
 
 - `g` — toggle the effects GUI
+- `t` — cycle the rain palette theme
 - `4` — toggle cinematic mode
 - `z` — toggle databend mode
 - `x` — toggle x-ray mode

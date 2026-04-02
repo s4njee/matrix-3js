@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
+import type { MatrixPalette } from './matrix-effects-config'
 
 // ── Character set & atlas config ──────────────────────────────────
 const CHARS =
@@ -264,24 +265,31 @@ function writeCellColorAndOpacity(
   index: number,
   age: number,
   trail: number,
+  palette: MatrixPalette,
 ) {
   const fade = 1 - age / trail
+  const trailColor = palette.trailColor
+  const dimTrailColor = palette.dimTrailColor
 
   if (age === 0) {
-    colorArray[index * 3] = 0.95
-    colorArray[index * 3 + 1] = 1
-    colorArray[index * 3 + 2] = 0.95
+    colorArray[index * 3] = palette.headColor[0]
+    colorArray[index * 3 + 1] = palette.headColor[1]
+    colorArray[index * 3 + 2] = palette.headColor[2]
   } else {
-    colorArray[index * 3] = fade * 0.094
-    colorArray[index * 3 + 1] = (95 + fade * 160) / 255
-    colorArray[index * 3 + 2] = fade * 0.078
+    colorArray[index * 3] = dimTrailColor[0] + (trailColor[0] - dimTrailColor[0]) * fade
+    colorArray[index * 3 + 1] = dimTrailColor[1] + (trailColor[1] - dimTrailColor[1]) * fade
+    colorArray[index * 3 + 2] = dimTrailColor[2] + (trailColor[2] - dimTrailColor[2]) * fade
   }
 
   opacityArray[index] = 0.16 + fade * 0.84
 }
 
 // ── Component ─────────────────────────────────────────────────────
-export default function MatrixRain() {
+interface MatrixRainProps {
+  palette: MatrixPalette
+}
+
+export default function MatrixRain({ palette }: MatrixRainProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const timeRef = useRef(0)
   const activeColumnsRef = useRef(DEFAULT_ACTIVE_COLUMNS)
@@ -444,7 +452,7 @@ export default function MatrixRain() {
         } else {
           writeVisibleInstanceMatrix(matArr, idx, s, cx, BASE_Y - rowIndex * ROW_SPACING, z[columnIndex])
           writeCellAtlasOffset(uv, idx, cellChar[cellIndex])
-          writeCellColorAndOpacity(col, opa, idx, cellAge[cellIndex], trail[columnIndex])
+          writeCellColorAndOpacity(col, opa, idx, cellAge[cellIndex], trail[columnIndex], palette)
         }
         idx += 1
       }

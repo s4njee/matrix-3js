@@ -8,27 +8,37 @@ import {
   isEditableTarget,
   type SharedSpecialEffectState,
 } from '../../../../src/shared/special-effects/index.ts'
-import type { MatrixEffectSettings } from './matrix-effects-config'
+import {
+  MATRIX_PALETTE_PRESETS,
+  type MatrixEffectSettings,
+  type MatrixPaletteName,
+} from './matrix-effects-config'
 
 interface MatrixEffectsProps {
   effectSettings: MatrixEffectSettings
+  paletteName: MatrixPaletteName
   setEffectSettings: Dispatch<SetStateAction<MatrixEffectSettings>>
+  setPaletteName: Dispatch<SetStateAction<MatrixPaletteName>>
   specialEffects: SharedSpecialEffectState
 }
 
 export default function MatrixEffects({
   effectSettings,
+  paletteName,
   setEffectSettings,
+  setPaletteName,
   specialEffects,
 }: MatrixEffectsProps) {
   // lil-gui expects mutable objects, while React state wants immutable
   // updates. Keep a live mirror here so the controls can read/write without
   // forcing the GUI to be recreated on every settings change.
   const paramsRef = useRef({ ...effectSettings })
+  const paletteParamsRef = useRef({ paletteName })
   const syncGuiDisplayRef = useRef(() => {})
 
   useEffect(() => {
     const params = paramsRef.current
+    const paletteParams = paletteParamsRef.current
     const gui = new GUI({ title: 'Effects', width: 280 })
     let guiVisible = false
 
@@ -83,6 +93,17 @@ export default function MatrixEffects({
     const barrelFolder = gui.addFolder('Barrel Blur')
     addNumberControl(barrelFolder, 'barrelBlurAmount', 'Amount', 0, 0.4, 0.001)
 
+    const paletteFolder = gui.addFolder('Palette')
+    paletteFolder.add(
+      paletteParams,
+      'paletteName',
+      Object.fromEntries(
+        Object.entries(MATRIX_PALETTE_PRESETS).map(([key, value]) => [value.label, key]),
+      ),
+    ).name('Theme').onChange((value: MatrixPaletteName) => {
+      setPaletteName(current => current === value ? current : value)
+    })
+
     syncGuiDisplayRef.current = () => {
       gui.controllersRecursive().forEach((controller) => controller.updateDisplay())
     }
@@ -113,12 +134,17 @@ export default function MatrixEffects({
       window.removeEventListener('keydown', onKeyDown)
       gui.destroy()
     }
-  }, [setEffectSettings])
+  }, [setEffectSettings, setPaletteName])
 
   useEffect(() => {
     Object.assign(paramsRef.current, effectSettings)
     syncGuiDisplayRef.current()
   }, [effectSettings])
+
+  useEffect(() => {
+    paletteParamsRef.current.paletteName = paletteName
+    syncGuiDisplayRef.current()
+  }, [paletteName])
 
   return (
     // Keep the effect stack declarative here so MatrixRain itself only worries
