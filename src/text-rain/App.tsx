@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { OrbitControls } from '@react-three/drei'
+import '../index.css'
 import MatrixRain from './MatrixRain'
 import MatrixEffects from './MatrixEffects'
 import {
