@@ -18,6 +18,14 @@ import {
 } from '../../../../src/shared/special-effects/index.ts'
 import SafeCanvas from '../../../../src/shared/webgl/SafeCanvas.tsx'
 
+const MATRIX_SHELL_STYLE = {
+  position: 'absolute',
+  inset: 0,
+  width: '100%',
+  height: '100%',
+  zIndex: 10,
+} as const
+
 export default function App() {
   const [effectSettings, setEffectSettings] = useState(MATRIX_EFFECT_DEFAULTS)
   const [paletteName, setPaletteName] = useState<MatrixPaletteName>('phosphor')
@@ -57,7 +65,7 @@ export default function App() {
   }, [])
 
   return (
-    <div className="matrix-shell">
+    <div className="matrix-shell" style={MATRIX_SHELL_STYLE}>
       <SafeCanvas
         dpr={[1, 1.5]}
         rendererOptions={{ antialias: false, powerPreference: 'high-performance' }}
