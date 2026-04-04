@@ -203,21 +203,8 @@ function writeHiddenInstance(
   index: number,
 ) {
   const off = index * 16
-  matrixArray[off] = 0
-  matrixArray[off + 1] = 0
-  matrixArray[off + 2] = 0
-  matrixArray[off + 3] = 0
-  matrixArray[off + 4] = 0
-  matrixArray[off + 5] = 0
-  matrixArray[off + 6] = 0
-  matrixArray[off + 7] = 0
-  matrixArray[off + 8] = 0
-  matrixArray[off + 9] = 0
-  matrixArray[off + 10] = 0
-  matrixArray[off + 11] = 0
-  matrixArray[off + 12] = 0
-  matrixArray[off + 13] = 0
-  matrixArray[off + 14] = 0
+  // Zero the entire 4×4 matrix via fill (compiles to memset), then set w=1.
+  matrixArray.fill(0, off, off + 16)
   matrixArray[off + 15] = 1
   opacityArray[index] = 0
 }
@@ -406,13 +393,13 @@ export default function MatrixRain({ palette }: MatrixRainProps) {
 
     for (let columnIndex = 0; columnIndex < activeColumns; columnIndex += 1) {
       acc[columnIndex] += speed[columnIndex] * dt
+      const columnStart = getCellIndex(columnIndex, 0)
 
       while (acc[columnIndex] >= 1) {
         acc[columnIndex] -= 1
         headY[columnIndex] += 1
 
         const trailLength = trail[columnIndex]
-        const columnStart = getCellIndex(columnIndex, 0)
         const columnEnd = columnStart + ROWS
 
         for (let cellIndex = columnStart; cellIndex < columnEnd; cellIndex += 1) {
@@ -451,7 +438,6 @@ export default function MatrixRain({ palette }: MatrixRainProps) {
       // Write the visible slice for this column into the instanced buffers.
       const cx = x[columnIndex] + Math.sin(t * 0.25 + phase[columnIndex]) * 0.03
       const s = size[columnIndex]
-      const columnStart = getCellIndex(columnIndex, 0)
 
       for (let rowIndex = 0; rowIndex < ROWS; rowIndex += 1) {
         const cellIndex = columnStart + rowIndex
