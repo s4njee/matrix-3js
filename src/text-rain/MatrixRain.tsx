@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { MatrixPalette } from './matrix-effects-config'
+import { useFrameRate } from '../../../../src/shared/performance/index.ts'
 
 // ── Character set & atlas config ──────────────────────────────────
 const CHARS =
@@ -293,6 +294,9 @@ export default function MatrixRain({ palette }: MatrixRainProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const timeRef = useRef(0)
   const activeColumnsRef = useRef(DEFAULT_ACTIVE_COLUMNS)
+  const { qualityTier } = useFrameRate()
+  const qualityTierRef = useRef(qualityTier)
+  qualityTierRef.current = qualityTier
 
   const atlas = useMemo(() => buildAtlas(), [])
   const state = useMemo(() => createSimulationState(), [])
@@ -364,6 +368,11 @@ export default function MatrixRain({ palette }: MatrixRainProps) {
   useFrame((_, dt) => {
     const m = meshRef.current
     if (!m) return
+
+    // Threshold switching temporarily disabled. To re-enable, uncomment:
+    // const tier = qualityTierRef.current
+    // const tierColumnCap = tier === 'low' ? 800 : DEFAULT_ACTIVE_COLUMNS
+    // if (activeColumnsRef.current > tierColumnCap) activeColumnsRef.current = tierColumnCap
 
     timeRef.current += dt
     const t = timeRef.current

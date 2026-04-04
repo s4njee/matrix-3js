@@ -1,6 +1,6 @@
 # Matrix Visualization Roadmap
 
-> Last reviewed: 2026-03-23
+> Last reviewed: 2026-04-03 (audit: no new completions — all open items verified unfinished)
 
 This file tracks the active Matrix implementation in `src/text-rain/`, marks what has already landed, and sorts the remaining work by value and effort.
 
