@@ -192,6 +192,8 @@ function resetColumn(state: SimulationState, columnIndex: number) {
 const DEFAULT_ACTIVE_COLUMNS = 2000
 const MIN_ACTIVE_COLUMNS = 250
 const ACTIVE_COLUMN_STEP = 250
+const LOW_TIER_ACTIVE_COLUMNS = 800
+const MAX_SIMULATION_DT = 1 / 30
 
 function clampActiveColumnCount(nextCount: number) {
   return Math.min(COLUMN_COUNT, Math.max(MIN_ACTIVE_COLUMNS, nextCount))
@@ -356,12 +358,12 @@ export default function MatrixRain({ palette }: MatrixRainProps) {
     const m = meshRef.current
     if (!m) return
 
-    // Threshold switching temporarily disabled. To re-enable, uncomment:
-    // const tier = qualityTierRef.current
-    // const tierColumnCap = tier === 'low' ? 800 : DEFAULT_ACTIVE_COLUMNS
-    // if (activeColumnsRef.current > tierColumnCap) activeColumnsRef.current = tierColumnCap
+    const tier = qualityTierRef.current
+    const tierColumnCap = tier === 'low' ? LOW_TIER_ACTIVE_COLUMNS : DEFAULT_ACTIVE_COLUMNS
+    if (activeColumnsRef.current > tierColumnCap) activeColumnsRef.current = tierColumnCap
 
-    timeRef.current += dt
+    const cappedDt = Math.min(dt, MAX_SIMULATION_DT)
+    timeRef.current += cappedDt
     const t = timeRef.current
     const { uv, col, opa } = bufs
     const {
@@ -392,7 +394,7 @@ export default function MatrixRain({ palette }: MatrixRainProps) {
     let idx = 0
 
     for (let columnIndex = 0; columnIndex < activeColumns; columnIndex += 1) {
-      acc[columnIndex] += speed[columnIndex] * dt
+      acc[columnIndex] += speed[columnIndex] * cappedDt
       const columnStart = getCellIndex(columnIndex, 0)
 
       while (acc[columnIndex] >= 1) {
