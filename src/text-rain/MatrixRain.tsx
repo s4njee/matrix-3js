@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { MatrixPalette } from './matrix-effects-config'
-import { useFrameRate } from '../../../../src/shared/performance/index.ts'
+import { useFrameRate, type FrameRateQualityTier } from '../../../../src/shared/performance/index.ts'
 
 // ── Character set & atlas config ──────────────────────────────────
 const CHARS =
@@ -25,13 +25,6 @@ const rand = (lo: number, hi: number) => Math.random() * (hi - lo) + lo
 const pickIdx = () => Math.floor(Math.random() * CHAR_COUNT)
 
 // ── Sine lookup table ─────────────────────────────────────────────
-const SIN_TABLE_SIZE = 1024
-const SIN_TABLE = new Float32Array(SIN_TABLE_SIZE)
-for (let i = 0; i < SIN_TABLE_SIZE; i++) {
-  SIN_TABLE[i] = Math.sin((i / SIN_TABLE_SIZE) * Math.PI * 2)
-}
-const sinLUT = (x: number) => SIN_TABLE[Math.floor(((x % (Math.PI * 2)) / (Math.PI * 2)) * SIN_TABLE_SIZE) & (SIN_TABLE_SIZE - 1)]
-
 // ── Build font atlas texture (runs once) ──────────────────────────
 function buildAtlas(): THREE.CanvasTexture {
   const w = ATLAS_COLS * CELL_PX
@@ -66,6 +59,8 @@ const VS = /* glsl */ `
   attribute vec2  aUvOff;
   attribute vec3  aCol;
   attribute float aOpa;
+  attribute float aRow;
+  attribute vec4  aColumn;
 
   varying vec2  vUv;
   varying vec3  vCol;
@@ -73,12 +68,23 @@ const VS = /* glsl */ `
 
   uniform float uAC; // atlas cols
   uniform float uAR; // atlas rows
+  uniform float uBaseY;
+  uniform float uRowSpacing;
+  uniform float uTime;
 
   void main() {
     vCol = aCol;
     vOpa = aOpa;
     vUv  = uv / vec2(uAC, uAR) + aUvOff;
-    gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+
+    float wobble = sin(uTime * 0.25 + aColumn.w) * 0.03;
+    vec3 worldPos = vec3(
+      aColumn.x + wobble,
+      uBaseY - aRow * uRowSpacing,
+      aColumn.y
+    );
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(worldPos + position * aColumn.z, 1.0);
   }
 `
 
@@ -89,9 +95,10 @@ const FS = /* glsl */ `
   varying float vOpa;
 
   void main() {
+    if (vOpa < 0.001) discard;
     float a = texture2D(uAtlas, vUv).r;
-    if (a < 0.08 || vOpa < 0.001) discard;
-    gl_FragColor = vec4(vCol, a * vOpa);
+    if (a < 0.08) discard;
+    gl_FragColor = vec4(vCol, 1.0);
   }
 `
 
@@ -102,6 +109,7 @@ interface SimulationState {
   speed: Float32Array
   size: Float32Array
   phase: Float32Array
+  columnData: Float32Array
   headY: Int16Array
   trail: Uint8Array
   resetAfter: Uint16Array
@@ -109,6 +117,7 @@ interface SimulationState {
   cellOn: Uint8Array
   cellAge: Uint8Array
   cellChar: Uint8Array
+  dirtyColumns: Uint8Array
 }
 
 // Keep the simulation indexed by column + row so the render loop can walk
@@ -128,6 +137,21 @@ function resetHeadY(trail: number) {
 
 function randomResetAfter() {
   return Math.floor(rand(120, 220))
+}
+
+function writeColumnData(
+  columnData: Float32Array,
+  columnIndex: number,
+  x: number,
+  z: number,
+  size: number,
+  phase: number,
+) {
+  const off = columnIndex * 4
+  columnData[off] = x
+  columnData[off + 1] = z
+  columnData[off + 2] = size
+  columnData[off + 3] = phase
 }
 
 function clearColumnCells(state: SimulationState, columnIndex: number) {
@@ -150,10 +174,12 @@ function seedColumn(
   state.speed[columnIndex] = rand(10, 22)
   state.size[columnIndex] = rand(0.1, 0.16)
   state.phase[columnIndex] = rand(0, Math.PI * 2)
+  writeColumnData(state.columnData, columnIndex, state.x[columnIndex], state.z[columnIndex], state.size[columnIndex], state.phase[columnIndex])
   state.headY[columnIndex] = headY
   state.trail[columnIndex] = trail
   state.resetAfter[columnIndex] = randomResetAfter()
   state.acc[columnIndex] = 0
+  state.dirtyColumns[columnIndex] = 1
 
   clearColumnCells(state, columnIndex)
 
@@ -175,6 +201,7 @@ function createSimulationState(): SimulationState {
     speed: new Float32Array(COLUMN_COUNT),
     size: new Float32Array(COLUMN_COUNT),
     phase: new Float32Array(COLUMN_COUNT),
+    columnData: new Float32Array(COLUMN_COUNT * 4),
     headY: new Int16Array(COLUMN_COUNT),
     trail: new Uint8Array(COLUMN_COUNT),
     resetAfter: new Uint16Array(COLUMN_COUNT),
@@ -182,6 +209,7 @@ function createSimulationState(): SimulationState {
     cellOn: new Uint8Array(MAX_INSTANCES),
     cellAge: new Uint8Array(MAX_INSTANCES),
     cellChar: new Uint8Array(MAX_INSTANCES),
+    dirtyColumns: new Uint8Array(COLUMN_COUNT),
   }
 
   for (let columnIndex = 0; columnIndex < COLUMN_COUNT; columnIndex += 1) {
@@ -211,45 +239,6 @@ function clampActiveColumnCount(nextCount: number) {
   return Math.min(COLUMN_COUNT, Math.max(MIN_ACTIVE_COLUMNS, nextCount))
 }
 
-function writeHiddenInstance(
-  matrixArray: Float32Array,
-  opacityArray: Float32Array,
-  index: number,
-) {
-  const off = index * 16
-  // Zero the entire 4×4 matrix via fill (compiles to memset), then set w=1.
-  matrixArray.fill(0, off, off + 16)
-  matrixArray[off + 15] = 1
-  opacityArray[index] = 0
-}
-
-function writeVisibleInstanceMatrix(
-  matrixArray: Float32Array,
-  index: number,
-  scale: number,
-  x: number,
-  y: number,
-  z: number,
-) {
-  const off = index * 16
-  matrixArray[off] = scale
-  matrixArray[off + 1] = 0
-  matrixArray[off + 2] = 0
-  matrixArray[off + 3] = 0
-  matrixArray[off + 4] = 0
-  matrixArray[off + 5] = scale
-  matrixArray[off + 6] = 0
-  matrixArray[off + 7] = 0
-  matrixArray[off + 8] = 0
-  matrixArray[off + 9] = 0
-  matrixArray[off + 10] = scale
-  matrixArray[off + 11] = 0
-  matrixArray[off + 12] = x
-  matrixArray[off + 13] = y
-  matrixArray[off + 14] = z
-  matrixArray[off + 15] = 1
-}
-
 function writeCellAtlasOffset(
   uvArray: Float32Array,
   index: number,
@@ -261,56 +250,84 @@ function writeCellAtlasOffset(
   uvArray[index * 2 + 1] = 1 - (atlasRow + 1) / ATLAS_ROWS
 }
 
-function writeCellColorAndOpacity(
+function writeCellColor(
   colorArray: Float32Array,
-  opacityArray: Float32Array,
   index: number,
   age: number,
   trail: number,
   palette: MatrixPalette,
+  fogColor: [number, number, number],
 ) {
   const fade = 1 - age / trail
   const trailColor = palette.trailColor
   const dimTrailColor = palette.dimTrailColor
+  const off = index * 3
 
   if (age === 0) {
-    colorArray[index * 3] = palette.headColor[0]
-    colorArray[index * 3 + 1] = palette.headColor[1]
-    colorArray[index * 3 + 2] = palette.headColor[2]
-  } else {
-    colorArray[index * 3] = dimTrailColor[0] + (trailColor[0] - dimTrailColor[0]) * fade
-    colorArray[index * 3 + 1] = dimTrailColor[1] + (trailColor[1] - dimTrailColor[1]) * fade
-    colorArray[index * 3 + 2] = dimTrailColor[2] + (trailColor[2] - dimTrailColor[2]) * fade
+    colorArray[off] = palette.headColor[0]
+    colorArray[off + 1] = palette.headColor[1]
+    colorArray[off + 2] = palette.headColor[2]
+    return
   }
 
-  opacityArray[index] = 0.16 + fade * 0.84
+  const trailMix = 0.16 + fade * 0.84
+  const trailR = dimTrailColor[0] + (trailColor[0] - dimTrailColor[0]) * fade
+  const trailG = dimTrailColor[1] + (trailColor[1] - dimTrailColor[1]) * fade
+  const trailB = dimTrailColor[2] + (trailColor[2] - dimTrailColor[2]) * fade
+
+  colorArray[off] = fogColor[0] + (trailR - fogColor[0]) * trailMix
+  colorArray[off + 1] = fogColor[1] + (trailG - fogColor[1]) * trailMix
+  colorArray[off + 2] = fogColor[2] + (trailB - fogColor[2]) * trailMix
 }
 
 // ── Component ─────────────────────────────────────────────────────
 interface MatrixRainProps {
   palette: MatrixPalette
   rainBoost?: boolean
+  onPerfStats?: (stats: {
+    activeColumns: number
+    activeInstances: number
+    uploadedBytesPerFrame: number
+    qualityTier: FrameRateQualityTier
+  }) => void
 }
 
-export default function MatrixRain({ palette, rainBoost = false }: MatrixRainProps) {
+export default function MatrixRain({ palette, rainBoost = false, onPerfStats }: MatrixRainProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const timeRef = useRef(0)
   const activeColumnsRef = useRef(DEFAULT_ACTIVE_COLUMNS)
+  const previousRenderedColumnsRef = useRef(0)
   const prevBoostRef = useRef(false)
   const { qualityTier } = useFrameRate()
   const qualityTierRef = useRef(qualityTier)
   qualityTierRef.current = qualityTier
+  const fogColor = useMemo(() => {
+    const color = new THREE.Color(palette.fog)
+    return [color.r, color.g, color.b] as [number, number, number]
+  }, [palette.fog])
 
   const atlas = useMemo(() => buildAtlas(), [])
   const state = useMemo(() => createSimulationState(), [])
 
   // Pre-allocate typed arrays for instanced attributes
   const bufs = useMemo(() => ({
-    mat: new Float32Array(MAX_INSTANCES * 16),
     uv:  new Float32Array(MAX_INSTANCES * 2),
     col: new Float32Array(MAX_INSTANCES * 3),
     opa: new Float32Array(MAX_INSTANCES),
   }), [])
+
+  const rowData = useMemo(() => {
+    const data = new Uint8Array(MAX_INSTANCES)
+
+    for (let columnIndex = 0; columnIndex < COLUMN_COUNT; columnIndex += 1) {
+      const columnStart = getCellIndex(columnIndex, 0)
+      for (let rowIndex = 0; rowIndex < ROWS; rowIndex += 1) {
+        data[columnStart + rowIndex] = rowIndex
+      }
+    }
+
+    return data
+  }, [])
 
   const material = useMemo(() => new THREE.ShaderMaterial({
     vertexShader: VS,
@@ -319,29 +336,43 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
       uAtlas: { value: atlas },
       uAC: { value: ATLAS_COLS },
       uAR: { value: ATLAS_ROWS },
+      uBaseY: { value: BASE_Y },
+      uRowSpacing: { value: ROW_SPACING },
+      uTime: { value: 0 },
     },
-    transparent: true,
-    depthWrite: false,
+    transparent: false,
+    depthWrite: true,
     side: THREE.DoubleSide,
+    blending: THREE.NoBlending,
   }), [atlas])
 
   const geometry = useMemo(() => {
     const g = new THREE.PlaneGeometry(1, 1)
+    g.setAttribute('aRow', new THREE.InstancedBufferAttribute(rowData, 1))
+    const columnAttr = new THREE.InstancedBufferAttribute(state.columnData, 4)
+    columnAttr.meshPerAttribute = ROWS
+    g.setAttribute('aColumn', columnAttr)
     g.setAttribute('aUvOff', new THREE.InstancedBufferAttribute(bufs.uv, 2))
     g.setAttribute('aCol',   new THREE.InstancedBufferAttribute(bufs.col, 3))
     g.setAttribute('aOpa',   new THREE.InstancedBufferAttribute(bufs.opa, 1))
     return g
-  }, [bufs])
+  }, [bufs, rowData, state.columnData])
 
   // Init all matrices to zero-scale (hidden)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const m = meshRef.current
     if (!m) return
     const id = new THREE.Matrix4().makeScale(0, 0, 0)
     for (let i = 0; i < MAX_INSTANCES; i++) m.setMatrixAt(i, id)
+    m.instanceMatrix.setUsage(THREE.StaticDrawUsage)
+    m.count = 0
     m.instanceMatrix.needsUpdate = true
     return () => { atlas.dispose(); material.dispose(); geometry.dispose() }
   }, [atlas, material, geometry])
+
+  useEffect(() => {
+    state.dirtyColumns.fill(1, 0, activeColumnsRef.current)
+  }, [fogColor, state])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -373,21 +404,24 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
     if (!m) return
 
     const tier = qualityTierRef.current
-    const tierColumnCap = tier === 'low' ? LOW_TIER_ACTIVE_COLUMNS 
-      : tier === 'medium' ? MEDIUM_TIER_ACTIVE_COLUMNS 
+    const tierColumnCap = tier === 'low' ? LOW_TIER_ACTIVE_COLUMNS
+      : tier === 'medium' ? MEDIUM_TIER_ACTIVE_COLUMNS
       : HIGH_TIER_ACTIVE_COLUMNS
     if (activeColumnsRef.current > tierColumnCap) activeColumnsRef.current = tierColumnCap
 
     const cappedDt = Math.min(dt, MAX_SIMULATION_DT)
     timeRef.current += cappedDt
     const t = timeRef.current
-    const { uv, col, opa } = bufs
+    material.uniforms.uTime.value = t
+    const { uv, col } = bufs
+    const opa = bufs.opa
     const {
       x,
       z,
       speed,
       size,
       phase,
+      columnData,
       headY,
       trail,
       resetAfter,
@@ -395,11 +429,12 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
       cellOn,
       cellAge,
       cellChar,
+      dirtyColumns,
     } = state
-    const matArr = m.instanceMatrix.array as Float32Array
     const baseActiveColumns = activeColumnsRef.current
     const activeColumns = rainBoost ? Math.min(baseActiveColumns * 2, COLUMN_COUNT) : baseActiveColumns
-    
+    const activeInstances = activeColumns * ROWS
+
     // On first frame of boost, reset the new columns to start from top
     if (rainBoost && !prevBoostRef.current) {
       for (let i = baseActiveColumns; i < activeColumns; i++) {
@@ -408,25 +443,38 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
       }
     }
     prevBoostRef.current = rainBoost
-    
-    const activeInstances = activeColumns * ROWS
+
+    if (activeColumns > previousRenderedColumnsRef.current) {
+      dirtyColumns.fill(1, previousRenderedColumnsRef.current, activeColumns)
+    }
+    previousRenderedColumnsRef.current = activeColumns
+
     const uvAttr = geometry.getAttribute('aUvOff') as THREE.InstancedBufferAttribute
     const colAttr = geometry.getAttribute('aCol') as THREE.InstancedBufferAttribute
     const opaAttr = geometry.getAttribute('aOpa') as THREE.InstancedBufferAttribute
+    const columnAttr = geometry.getAttribute('aColumn') as THREE.InstancedBufferAttribute
+
+    uvAttr.clearUpdateRanges()
+    colAttr.clearUpdateRanges()
+    opaAttr.clearUpdateRanges()
+    columnAttr.clearUpdateRanges()
 
     // Only the active prefix is rendered, so the instanced mesh count follows
     // the selected density instead of drawing the full backing buffer.
     m.count = activeInstances
 
-    let idx = 0
+    let runStart: number | null = null
+    let uploadedBytes = 0
 
     for (let columnIndex = 0; columnIndex < activeColumns; columnIndex += 1) {
       acc[columnIndex] += speed[columnIndex] * cappedDt
       const columnStart = getCellIndex(columnIndex, 0)
+      let columnDirty = dirtyColumns[columnIndex] === 1
 
       while (acc[columnIndex] >= 1) {
         acc[columnIndex] -= 1
         headY[columnIndex] += 1
+        columnDirty = true
 
         const trailLength = trail[columnIndex]
         const columnEnd = columnStart + ROWS
@@ -455,50 +503,84 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
         for (let k = 0; k < 2; k += 1) {
           const rowIndex = Math.floor(rand(0, ROWS))
           const cellIndex = columnStart + rowIndex
-          if (cellOn[cellIndex] && Math.random() < 0.5) cellChar[cellIndex] = pickIdx()
+          if (cellOn[cellIndex] && Math.random() < 0.5) {
+            cellChar[cellIndex] = pickIdx()
+            columnDirty = true
+          }
         }
 
         if (headY[columnIndex] - trailLength > ROWS + resetAfter[columnIndex]) {
           resetColumn(state, columnIndex)
+          columnDirty = true
           break
         }
       }
 
-      // Write the visible slice for this column into the instanced buffers.
-      const cx = x[columnIndex] + sinLUT(t * 0.25 + phase[columnIndex]) * 0.03
-      const s = size[columnIndex]
+      if (!columnDirty) {
+        if (runStart !== null) {
+          const runEnd = columnIndex
+          const runColumns = runEnd - runStart
+          const cellOffset = runStart * ROWS
+          const cellCount = runColumns * ROWS
+
+          uvAttr.addUpdateRange(cellOffset * 2, cellCount * 2)
+          colAttr.addUpdateRange(cellOffset * 3, cellCount * 3)
+          opaAttr.addUpdateRange(cellOffset, cellCount)
+          columnAttr.addUpdateRange(runStart * 4, runColumns * 4)
+          uploadedBytes += runColumns * (ROWS * 24 + 16)
+          runStart = null
+        }
+
+        continue
+      }
+
+      dirtyColumns[columnIndex] = 0
+
+      if (runStart === null) {
+        runStart = columnIndex
+      }
+
+      writeColumnData(columnData, columnIndex, x[columnIndex], z[columnIndex], size[columnIndex], phase[columnIndex])
 
       for (let rowIndex = 0; rowIndex < ROWS; rowIndex += 1) {
         const cellIndex = columnStart + rowIndex
 
         if (!cellOn[cellIndex]) {
-          writeHiddenInstance(matArr, opa, idx)
+          opa[cellIndex] = 0
         } else {
-          writeVisibleInstanceMatrix(matArr, idx, s, cx, BASE_Y - rowIndex * ROW_SPACING, z[columnIndex])
-          writeCellAtlasOffset(uv, idx, cellChar[cellIndex])
-          writeCellColorAndOpacity(col, opa, idx, cellAge[cellIndex], trail[columnIndex], palette)
+          writeCellAtlasOffset(uv, cellIndex, cellChar[cellIndex])
+          writeCellColor(col, cellIndex, cellAge[cellIndex], trail[columnIndex], palette, fogColor)
+          opa[cellIndex] = 1
         }
-        idx += 1
       }
     }
 
-    // Mark only the active slice dirty so Three uploads the minimum amount of
-    // per-instance data needed for the current density.
-    m.instanceMatrix.clearUpdateRanges()
-    m.instanceMatrix.addUpdateRange(0, activeInstances * 16)
-    m.instanceMatrix.needsUpdate = true
+    if (runStart !== null) {
+      const runEnd = activeColumns
+      const runColumns = runEnd - runStart
+      const cellOffset = runStart * ROWS
+      const cellCount = runColumns * ROWS
 
-    uvAttr.clearUpdateRanges()
-    uvAttr.addUpdateRange(0, activeInstances * 2)
-    uvAttr.needsUpdate = true
+      uvAttr.addUpdateRange(cellOffset * 2, cellCount * 2)
+      colAttr.addUpdateRange(cellOffset * 3, cellCount * 3)
+      opaAttr.addUpdateRange(cellOffset, cellCount)
+      columnAttr.addUpdateRange(runStart * 4, runColumns * 4)
+      uploadedBytes += runColumns * (ROWS * 24 + 16)
+    }
 
-    colAttr.clearUpdateRanges()
-    colAttr.addUpdateRange(0, activeInstances * 3)
-    colAttr.needsUpdate = true
+    if (uploadedBytes > 0) {
+      uvAttr.needsUpdate = true
+      colAttr.needsUpdate = true
+      opaAttr.needsUpdate = true
+      columnAttr.needsUpdate = true
+    }
 
-    opaAttr.clearUpdateRanges()
-    opaAttr.addUpdateRange(0, activeInstances)
-    opaAttr.needsUpdate = true
+    onPerfStats?.({
+      activeColumns,
+      activeInstances,
+      uploadedBytesPerFrame: uploadedBytes,
+      qualityTier: tier,
+    })
   })
 
   return (
