@@ -3,6 +3,7 @@ import { useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import '../index.css'
 import MatrixRain from './MatrixRain'
+import MatrixRainShader from './MatrixRainShader'
 import MatrixEffects from './MatrixEffects'
 import {
   MATRIX_EFFECT_DEFAULTS,
@@ -27,6 +28,10 @@ const MATRIX_SHELL_STYLE = {
   height: '100%',
   zIndex: 10,
 } as const
+
+const MATRIX_ENGINE_STORAGE_KEY = 'eva:matrix-engine'
+
+type MatrixRainEngine = 'instanced' | 'shader'
 
 interface MatrixPerfStats {
   activeColumns: number
@@ -78,6 +83,22 @@ function getMatrixPerfEnabled() {
   if (typeof window === 'undefined') return false
 
   return new URLSearchParams(window.location.search).get('perf') === '1'
+}
+
+function isMatrixRainEngine(value: string | null): value is MatrixRainEngine {
+  return value === 'instanced' || value === 'shader'
+}
+
+function getInitialMatrixRainEngine(): MatrixRainEngine {
+  if (typeof window === 'undefined') return 'shader'
+
+  const queryEngine = new URLSearchParams(window.location.search).get('engine')
+  if (isMatrixRainEngine(queryEngine)) return queryEngine
+
+  const storedEngine = window.localStorage.getItem(MATRIX_ENGINE_STORAGE_KEY)
+  if (isMatrixRainEngine(storedEngine)) return storedEngine
+
+  return 'shader'
 }
 
 function getHeapBytes() {
@@ -173,6 +194,7 @@ export default function App() {
   const [effectSettings, setEffectSettings] = useState(MATRIX_EFFECT_DEFAULTS)
   const [paletteName, setPaletteName] = useState<MatrixPaletteName>('phosphor')
   const [rainBoost, setRainBoost] = useState(false)
+  const [rainEngine] = useState<MatrixRainEngine>(() => getInitialMatrixRainEngine())
   const [specialEffects, setSpecialEffects] = useState<SharedSpecialEffectState>(() => (
     createInitialSharedSpecialEffectState()
   ))
@@ -185,6 +207,10 @@ export default function App() {
     perfEnabled ? { forcedQualityTier: 'high' as const } : undefined
   ), [perfEnabled])
   const dprRange = useMemo(() => [0.75, dprCap] as [number, number], [dprCap])
+
+  useEffect(() => {
+    window.localStorage.setItem(MATRIX_ENGINE_STORAGE_KEY, rainEngine)
+  }, [rainEngine])
 
   useEffect(() => {
     // Matrix uses the same post-processing hotkeys as the other scenes, so the
@@ -242,13 +268,23 @@ export default function App() {
         <color attach="background" args={[palette.background]} />
         <fog attach="fog" args={[palette.fog, 8, 30]} />
 
-        <MatrixRain
-          palette={palette}
-          rainBoost={rainBoost}
-          onPerfStats={(stats) => {
-            perfStatsRef.current = stats
-          }}
-        />
+        {rainEngine === 'shader' ? (
+          <MatrixRainShader
+            palette={palette}
+            rainBoost={rainBoost}
+            onPerfStats={(stats) => {
+              perfStatsRef.current = stats
+            }}
+          />
+        ) : (
+          <MatrixRain
+            palette={palette}
+            rainBoost={rainBoost}
+            onPerfStats={(stats) => {
+              perfStatsRef.current = stats
+            }}
+          />
+        )}
 
         <MatrixDprCapBridge
           macLikePlatform={macLikePlatform}

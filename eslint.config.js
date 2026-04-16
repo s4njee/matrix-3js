@@ -21,7 +21,10 @@ export default defineConfig([
     },
   },
   {
-    files: ['src/text-rain/MatrixRain.tsx'],
+    files: [
+      'src/text-rain/MatrixRain.tsx',
+      'src/text-rain/MatrixRainShader.tsx',
+    ],
     rules: {
       'react-hooks/immutability': 'off',
       'react-hooks/purity': 'off',

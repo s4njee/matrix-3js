@@ -10,6 +10,9 @@ The current Vite entrypoint imports `src/text-rain/App.tsx` from `src/main.tsx`,
 - `MatrixEffects.tsx` — lil-gui controls plus the shared post-processing stack bridge
 - `matrix-effects-config.ts` — defaults for Matrix-specific effect tuning and palette presets
 - `MatrixRain.tsx` — atlas-backed instanced glyph quads driven by a flat typed-array simulation and theme-aware glyph colors
+- `MatrixRainShader.tsx` — fullscreen fragment-shader renderer behind `?engine=shader`
+- `matrix-atlas.ts` — shared glyph atlas builder used by both rain engines
+- `matrix-rain-shader.glsl.ts` — shader source for the fullscreen renderer
 
 ## Entry point
 
@@ -22,6 +25,13 @@ import App from './text-rain/App'
 ## Caveat
 
 This version is still performance-sensitive, but the active path no longer creates per-cell text objects. It uses one instanced mesh plus typed-array simulation buffers and only uploads the active column slice each frame.
+
+The experimental fullscreen renderer can be selected with `?engine=shader`.
+It draws one instanced batch of vertical shader columns spread through X/Z
+space, with glyph selection, trail color, and column visibility computed in the
+fragment shader. `?engine=instanced` returns to the 3D instanced reference
+renderer. The shader path is the default when no engine is specified.
+`OrbitControls` stay mounted for both engines.
 
 ## Hotkeys
 
