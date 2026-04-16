@@ -24,6 +24,14 @@ const BASE_Y = 10
 const rand = (lo: number, hi: number) => Math.random() * (hi - lo) + lo
 const pickIdx = () => Math.floor(Math.random() * CHAR_COUNT)
 
+// ── Sine lookup table ─────────────────────────────────────────────
+const SIN_TABLE_SIZE = 1024
+const SIN_TABLE = new Float32Array(SIN_TABLE_SIZE)
+for (let i = 0; i < SIN_TABLE_SIZE; i++) {
+  SIN_TABLE[i] = Math.sin((i / SIN_TABLE_SIZE) * Math.PI * 2)
+}
+const sinLUT = (x: number) => SIN_TABLE[Math.floor(((x % (Math.PI * 2)) / (Math.PI * 2)) * SIN_TABLE_SIZE) & (SIN_TABLE_SIZE - 1)]
+
 // ── Build font atlas texture (runs once) ──────────────────────────
 function buildAtlas(): THREE.CanvasTexture {
   const w = ATLAS_COLS * CELL_PX
@@ -189,10 +197,12 @@ function resetColumn(state: SimulationState, columnIndex: number) {
   seedColumn(state, columnIndex, resetHeadY(trail), trail)
 }
 
-const DEFAULT_ACTIVE_COLUMNS = 2000
+const DEFAULT_ACTIVE_COLUMNS = 3200
 const MIN_ACTIVE_COLUMNS = 250
 const ACTIVE_COLUMN_STEP = 250
-const LOW_TIER_ACTIVE_COLUMNS = 800
+const LOW_TIER_ACTIVE_COLUMNS = 600
+const MEDIUM_TIER_ACTIVE_COLUMNS = 1600
+const HIGH_TIER_ACTIVE_COLUMNS = 3200
 const MAX_SIMULATION_DT = 1 / 30
 
 function clampActiveColumnCount(nextCount: number) {
@@ -277,12 +287,14 @@ function writeCellColorAndOpacity(
 // ── Component ─────────────────────────────────────────────────────
 interface MatrixRainProps {
   palette: MatrixPalette
+  rainBoost?: boolean
 }
 
-export default function MatrixRain({ palette }: MatrixRainProps) {
+export default function MatrixRain({ palette, rainBoost = false }: MatrixRainProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const timeRef = useRef(0)
   const activeColumnsRef = useRef(DEFAULT_ACTIVE_COLUMNS)
+  const prevBoostRef = useRef(false)
   const { qualityTier } = useFrameRate()
   const qualityTierRef = useRef(qualityTier)
   qualityTierRef.current = qualityTier
@@ -359,7 +371,9 @@ export default function MatrixRain({ palette }: MatrixRainProps) {
     if (!m) return
 
     const tier = qualityTierRef.current
-    const tierColumnCap = tier === 'low' ? LOW_TIER_ACTIVE_COLUMNS : DEFAULT_ACTIVE_COLUMNS
+    const tierColumnCap = tier === 'low' ? LOW_TIER_ACTIVE_COLUMNS 
+      : tier === 'medium' ? MEDIUM_TIER_ACTIVE_COLUMNS 
+      : HIGH_TIER_ACTIVE_COLUMNS
     if (activeColumnsRef.current > tierColumnCap) activeColumnsRef.current = tierColumnCap
 
     const cappedDt = Math.min(dt, MAX_SIMULATION_DT)
@@ -381,7 +395,18 @@ export default function MatrixRain({ palette }: MatrixRainProps) {
       cellChar,
     } = state
     const matArr = m.instanceMatrix.array as Float32Array
-    const activeColumns = activeColumnsRef.current
+    const baseActiveColumns = activeColumnsRef.current
+    const activeColumns = rainBoost ? Math.min(baseActiveColumns * 2, COLUMN_COUNT) : baseActiveColumns
+    
+    // On first frame of boost, reset the new columns to start from top
+    if (rainBoost && !prevBoostRef.current) {
+      for (let i = baseActiveColumns; i < activeColumns; i++) {
+        const trail = Math.floor(rand(22, 38))
+        seedColumn(state, i, -trail - Math.floor(rand(5, 30)), trail)
+      }
+    }
+    prevBoostRef.current = rainBoost
+    
     const activeInstances = activeColumns * ROWS
     const uvAttr = geometry.getAttribute('aUvOff') as THREE.InstancedBufferAttribute
     const colAttr = geometry.getAttribute('aCol') as THREE.InstancedBufferAttribute
@@ -438,7 +463,7 @@ export default function MatrixRain({ palette }: MatrixRainProps) {
       }
 
       // Write the visible slice for this column into the instanced buffers.
-      const cx = x[columnIndex] + Math.sin(t * 0.25 + phase[columnIndex]) * 0.03
+      const cx = x[columnIndex] + sinLUT(t * 0.25 + phase[columnIndex]) * 0.03
       const s = size[columnIndex]
 
       for (let rowIndex = 0; rowIndex < ROWS; rowIndex += 1) {

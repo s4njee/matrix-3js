@@ -170,6 +170,7 @@ export default function MatrixEffects({
       hueSatEnabled={specialEffects.hueSatEnabled}
       pixelMosaicEnabled={specialEffects.pixelMosaicEnabled}
       saturation={specialEffects.saturation}
+      scanlineAlwaysOn={true}
       scanlineDensity={effectSettings.scanDensity}
       scanlineEnabled={effectSettings.scanEnabled}
       scanlineOpacity={effectSettings.scanOpacity}

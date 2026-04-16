@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import '../index.css'
 import MatrixRain from './MatrixRain'
@@ -29,6 +30,7 @@ const MATRIX_SHELL_STYLE = {
 export default function App() {
   const [effectSettings, setEffectSettings] = useState(MATRIX_EFFECT_DEFAULTS)
   const [paletteName, setPaletteName] = useState<MatrixPaletteName>('phosphor')
+  const [rainBoost, setRainBoost] = useState(false)
   const [specialEffects, setSpecialEffects] = useState<SharedSpecialEffectState>(() => (
     createInitialSharedSpecialEffectState()
   ))
@@ -54,13 +56,25 @@ export default function App() {
 
       if (event.key === 't' || event.key === 'T') {
         setPaletteName(current => getNextMatrixPaletteName(current))
+      } else if (event.key === ' ') {
+        event.preventDefault()
+        setRainBoost(true)
+      }
+    }
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === ' ') {
+        event.preventDefault()
+        setRainBoost(false)
       }
     }
 
     window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
 
     return () => {
       window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
     }
   }, [])
 
@@ -76,7 +90,7 @@ export default function App() {
         <color attach="background" args={[palette.background]} />
         <fog attach="fog" args={[palette.fog, 8, 30]} />
 
-        <MatrixRain palette={palette} />
+        <MatrixRain palette={palette} rainBoost={rainBoost} />
 
         <OrbitControls
           enablePan={false}
