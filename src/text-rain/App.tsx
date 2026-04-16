@@ -82,7 +82,7 @@ export default function App() {
     <div className="matrix-shell" style={MATRIX_SHELL_STYLE}>
       <SafeCanvas
         dpr={[0.75, 2]}
-        rendererOptions={{ antialias: false, powerPreference: 'high-performance' }}
+        rendererOptions={{ antialias: true, powerPreference: 'high-performance' }}
         camera={{ position: [0, 0, 12], fov: 55 }}
         sceneLabel="Matrix"
       >

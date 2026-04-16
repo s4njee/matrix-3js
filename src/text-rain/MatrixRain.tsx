@@ -54,8 +54,10 @@ function buildAtlas(): THREE.CanvasTexture {
     )
   }
   const tex = new THREE.CanvasTexture(c)
-  tex.minFilter = THREE.LinearFilter
+  tex.minFilter = THREE.LinearMipmapLinearFilter
   tex.magFilter = THREE.LinearFilter
+  tex.generateMipmaps = true
+  tex.anisotropy = 4
   return tex
 }
 
