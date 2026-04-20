@@ -85,6 +85,12 @@ function getMatrixPerfEnabled() {
   return new URLSearchParams(window.location.search).get('perf') === '1'
 }
 
+function getMatrixWebGPUEnabled() {
+  if (typeof window === 'undefined') return false
+
+  return new URLSearchParams(window.location.search).get('webgpu') === '1'
+}
+
 function isMatrixRainEngine(value: string | null): value is MatrixRainEngine {
   return value === 'instanced' || value === 'shader'
 }
@@ -202,6 +208,7 @@ export default function App() {
   const macLikePlatform = isMacLikePlatform()
   const [dprCap, setDprCap] = useState(() => (macLikePlatform ? 2 : 1.5))
   const perfEnabled = getMatrixPerfEnabled()
+  const webgpuEnabled = getMatrixWebGPUEnabled()
   const perfStatsRef = useRef<MatrixPerfStats | null>(null)
   const frameRateConfig = useMemo(() => (
     perfEnabled ? { forcedQualityTier: 'high' as const } : undefined
@@ -263,6 +270,7 @@ export default function App() {
         camera={{ position: [0, 0, 12], fov: 55 }}
         sceneLabel="Matrix"
         frameRateConfig={frameRateConfig}
+        webgpuEnabled={webgpuEnabled}
       >
         {/* Scene content, controls, and post-processing stay as separate blocks so the render path is easy to scan. */}
         <color attach="background" args={[palette.background]} />
@@ -303,13 +311,16 @@ export default function App() {
           maxPolarAngle={(Math.PI * 2) / 3}
         />
 
-        <MatrixEffects
-          effectSettings={effectSettings}
-          paletteName={paletteName}
-          setEffectSettings={setEffectSettings}
-          setPaletteName={setPaletteName}
-          specialEffects={specialEffects}
-        />
+        {/* Post-processing uses WebGL-specific APIs; skip in WebGPU mode until Phase 5 */}
+        {!webgpuEnabled && (
+          <MatrixEffects
+            effectSettings={effectSettings}
+            paletteName={paletteName}
+            setEffectSettings={setEffectSettings}
+            setPaletteName={setPaletteName}
+            specialEffects={specialEffects}
+          />
+        )}
       </SafeCanvas>
 
       <div className="matrix-status-chip">
