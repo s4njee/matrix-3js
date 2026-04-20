@@ -51,17 +51,22 @@ export const FS = /* glsl */ `
 
     float wobble = sin(uTime * uWobbleFreq + phase) * uWobbleAmp;
     vec2 glyphUv = vec2(cellUv.x, 1.0 - cellUv.y);
-    glyphUv = (glyphUv - 0.5) * vec2(0.86, 0.48) + 0.5;
+    glyphUv = (glyphUv - 0.5) * vec2(0.86, 0.78) + 0.5;
     glyphUv.x -= wobble;
     if (glyphUv.x < 0.0 || glyphUv.x > 1.0) return vec4(0.0);
 
     float age = head - row;
     if (age < 0.0 || age > trailLen) return vec4(0.0);
 
-    float scrambleSlot = floor(uTime * 6.0);
+    // Glyph identity: each grid row in a column keeps a stable character
+    // for the entire lifecycle of that column.  We hash by (col, row, phase)
+    // where phase is unique per column spawn, so a recycled column gets
+    // fresh glyphs.  Rare sparse mutation (~7 % of cells, ticking ~2×/s)
+    // gives the occasional flicker seen in the film.
+    float baseKey = hash21(vec2(col + streamIndex * 13.0, row + phase * 100.0));
+    float scrambleSlot = floor(uTime * 1.8);
     float scrambleKey = hash21(vec2(col, row) + vec2(scrambleSlot * 17.0, streamIndex * 31.0));
-    float baseKey = hash21(vec2(col + streamIndex * 13.0, row + floor(head)));
-    float glyphKey = mix(baseKey, scrambleKey, step(0.75, scrambleKey));
+    float glyphKey = mix(baseKey, scrambleKey, step(0.93, scrambleKey));
     float glyphIdx = floor(glyphKey * uCharCount);
     float atlasCol = mod(glyphIdx, uAtlasSize.x);
     float atlasRow = floor(glyphIdx / uAtlasSize.x);

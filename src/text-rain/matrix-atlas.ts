@@ -10,7 +10,18 @@ export const ATLAS_ROWS = Math.ceil(CHAR_COUNT / ATLAS_COLS)
 
 const CELL_PX = 64
 
-export function buildAtlas(): THREE.CanvasTexture {
+// ── Eager atlas singleton ─────────────────────────────────────────
+// The atlas canvas is rendered once at module load time — before React
+// mounts — so neither engine pays for it during the first frame.  Both
+// MatrixRain (instanced) and MatrixRainShader share the same bitmap;
+// each caller wraps it in its own THREE.CanvasTexture with the filter
+// settings it needs.
+
+let _atlasCanvas: HTMLCanvasElement | null = null
+
+function getAtlasCanvas(): HTMLCanvasElement {
+  if (_atlasCanvas) return _atlasCanvas
+
   const w = ATLAS_COLS * CELL_PX
   const h = ATLAS_ROWS * CELL_PX
   const c = document.createElement('canvas')
@@ -30,7 +41,21 @@ export function buildAtlas(): THREE.CanvasTexture {
       Math.floor(i / ATLAS_COLS) * CELL_PX + CELL_PX / 2,
     )
   }
-  const tex = new THREE.CanvasTexture(c)
+
+  _atlasCanvas = c
+  return c
+}
+
+// Trigger the canvas render immediately at import time so the work is
+// done before any component mounts.
+getAtlasCanvas()
+
+/**
+ * Return a fresh THREE.CanvasTexture backed by the shared atlas canvas.
+ * Callers own the texture and are responsible for disposing it.
+ */
+export function buildAtlas(): THREE.CanvasTexture {
+  const tex = new THREE.CanvasTexture(getAtlasCanvas())
   tex.minFilter = THREE.LinearMipmapLinearFilter
   tex.magFilter = THREE.LinearFilter
   tex.generateMipmaps = true
