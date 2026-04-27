@@ -234,12 +234,16 @@ export default function MatrixRainShader({
   const [densityOffset, setDensityOffset] = useState(0)
   const previousBoostRef = useRef(false)
 
+  // Lock the quality tier at mount time so the grid dimensions stay stable.
+  // Tier changes mid-session no longer reset the entire rain scene.
+  const initialTierRef = useRef(qualityTier)
+
   const grid = useMemo(() => {
-    const rows = Math.max(30, getRowsForTier(qualityTier) + Math.round(densityOffset / 4))
+    const rows = Math.max(30, getRowsForTier(initialTierRef.current) + Math.round(densityOffset / 4))
     const cols = getColumnsForRows(rows + densityOffset)
 
     return { cols, rows }
-  }, [densityOffset, qualityTier])
+  }, [densityOffset])
 
   const atlas = useMemo(() => {
     const texture = buildAtlas()

@@ -4,6 +4,7 @@ import { OrbitControls } from '@react-three/drei'
 import '../index.css'
 import MatrixRain from './MatrixRain'
 import MatrixRainShader from './MatrixRainShader'
+import MatrixRainCompute from './MatrixRainCompute'
 import MatrixEffects from './MatrixEffects'
 import {
   MATRIX_EFFECT_DEFAULTS,
@@ -31,7 +32,7 @@ const MATRIX_SHELL_STYLE = {
 
 const MATRIX_ENGINE_STORAGE_KEY = 'eva:matrix-engine'
 
-type MatrixRainEngine = 'instanced' | 'shader'
+type MatrixRainEngine = 'instanced' | 'shader' | 'webgpu'
 
 interface MatrixPerfStats {
   activeColumns: number
@@ -92,17 +93,27 @@ function getMatrixWebGPUEnabled() {
 }
 
 function isMatrixRainEngine(value: string | null): value is MatrixRainEngine {
-  return value === 'instanced' || value === 'shader'
+  return value === 'instanced' || value === 'shader' || value === 'webgpu'
+}
+
+function isWebGPUAvailable(): boolean {
+  return typeof navigator !== 'undefined' && 'gpu' in navigator
 }
 
 function getInitialMatrixRainEngine(): MatrixRainEngine {
   if (typeof window === 'undefined') return 'shader'
 
   const queryEngine = new URLSearchParams(window.location.search).get('engine')
-  if (isMatrixRainEngine(queryEngine)) return queryEngine
+  if (isMatrixRainEngine(queryEngine)) {
+    if (queryEngine === 'webgpu' && !isWebGPUAvailable()) return 'shader'
+    return queryEngine
+  }
 
   const storedEngine = window.localStorage.getItem(MATRIX_ENGINE_STORAGE_KEY)
-  if (isMatrixRainEngine(storedEngine)) return storedEngine
+  if (isMatrixRainEngine(storedEngine)) {
+    if (storedEngine === 'webgpu' && !isWebGPUAvailable()) return 'shader'
+    return storedEngine
+  }
 
   return 'shader'
 }
@@ -276,7 +287,15 @@ export default function App() {
         <color attach="background" args={[palette.background]} />
         <fog attach="fog" args={[palette.fog, 8, 30]} />
 
-        {rainEngine === 'shader' ? (
+        {rainEngine === 'webgpu' ? (
+          <MatrixRainCompute
+            palette={palette}
+            rainBoost={rainBoost}
+            onPerfStats={(stats) => {
+              perfStatsRef.current = stats
+            }}
+          />
+        ) : rainEngine === 'shader' ? (
           <MatrixRainShader
             palette={palette}
             rainBoost={rainBoost}
