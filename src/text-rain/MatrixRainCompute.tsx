@@ -1,13 +1,14 @@
 /**
  * MatrixRainCompute — WebGPU compute-backed rain simulation.
  *
- * Uses the same rendering approach as MatrixRainShader (instanced column
- * strips + fragment-shader glyph lookup from a state texture) but replaces
- * the CPU stepColumns() loop with a WGSL compute shader.  The simulation
- * state lives entirely on the GPU after initial seeding.
+ * The rain state (head, trail, phase, speed) lives entirely on the GPU as a
+ * storage buffer.  Each frame a WGSL compute pass advances the simulation,
+ * then `copyBufferToTexture` writes the new state into the same GPUTexture
+ * that backs the `uColumnState` sampler used by the fragment shader.  No CPU
+ * readback, no per-frame DataTexture upload.
  *
- * Requires WebGPURenderer (`?engine=webgpu`).  Falls back to the shader
- * engine automatically when WebGPU is unavailable.
+ * Requires the WebGPURenderer (`?engine=webgpu`).  The shader engine remains
+ * the portable WebGL fallback.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -18,9 +19,7 @@ import { ATLAS_COLS, ATLAS_ROWS, CHAR_COUNT, buildAtlas } from './matrix-atlas'
 import { FS, VS } from './matrix-rain-shader.glsl'
 import { useFrameRate, type FrameRateQualityTier } from '../../../../src/shared/performance/index.ts'
 
-// ── Constants (match MatrixRainShader) ────────────────────────────
 const STREAM_COUNT = 2
-const BOOST_STREAM = 1
 const MIN_DENSITY_OFFSET = -80
 const MAX_DENSITY_OFFSET = 140
 const DENSITY_STEP = 40
@@ -31,12 +30,23 @@ const COLUMN_FIELD_DEPTH = 24
 const COLUMN_MIN_WIDTH = 0.1
 const COLUMN_MAX_WIDTH = 0.18
 
+// WebGPU requires copyBufferToTexture's bytesPerRow to be a multiple of 256
+// when the copy spans more than one texture row.  We pad the per-row stride
+// of the storage buffer so the same buffer can drive both the compute pass
+// and the texture upload without a separate staging copy.
+const COPY_BYTES_PER_ROW_ALIGNMENT = 256
+const ENTRY_BYTES = 16 // vec4<f32>
+
 const rand = (lo: number, hi: number) => Math.random() * (hi - lo) + lo
+
+function getRowStrideEntries(cols: number) {
+  const rowBytes = cols * ENTRY_BYTES
+  const paddedBytes = Math.ceil(rowBytes / COPY_BYTES_PER_ROW_ALIGNMENT) * COPY_BYTES_PER_ROW_ALIGNMENT
+  return paddedBytes / ENTRY_BYTES
+}
 
 // ── WGSL compute shader ──────────────────────────────────────────
 const COMPUTE_WGSL = /* wgsl */ `
-  // Column state: vec4(head, trail, phase, speed) per entry.
-  // Layout: entries 0..cols-1 = stream 0, cols..2*cols-1 = stream 1.
   @group(0) @binding(0) var<storage, read_write> columnState: array<vec4<f32>>;
   @group(0) @binding(1) var<uniform> params: Params;
 
@@ -47,6 +57,8 @@ const COMPUTE_WGSL = /* wgsl */ `
     rainBoost: f32,
     boostStarted: f32,
     frame: f32,
+    rowStride: f32,
+    pad: f32,
   };
 
   fn hash21(p: vec2<f32>) -> f32 {
@@ -67,18 +79,8 @@ const COMPUTE_WGSL = /* wgsl */ `
     return randRange(seed, 10.0, 22.0);
   }
 
-  fn randomResetAfter(seed: vec2<f32>) -> f32 {
-    return floor(randRange(seed, 12.0, 28.0));
-  }
-
   fn resetHeadY(trail: f32, seed: vec2<f32>) -> f32 {
     return -trail - floor(randRange(seed, 5.0, 30.0));
-  }
-
-  fn seedColumnCompute(index: u32, headY: f32, trail: f32, seed: vec2<f32>) {
-    let phase = randRange(seed + vec2<f32>(1.0, 0.0), 0.0, 6.2832);
-    let speed = randomSpeed(seed + vec2<f32>(2.0, 0.0));
-    columnState[index] = vec4<f32>(headY, trail, phase, speed);
   }
 
   @compute @workgroup_size(64)
@@ -90,10 +92,10 @@ const COMPUTE_WGSL = /* wgsl */ `
     let dt = params.dt;
     let rows = params.rows;
     let frame = params.frame;
+    let rowStride = u32(params.rowStride);
 
-    // Process both streams for this column
     for (var stream = 0u; stream < 2u; stream++) {
-      let index = stream * cols + col;
+      let index = stream * rowStride + col;
       var state = columnState[index];
       var head = state.x;
       var trail = state.y;
@@ -103,7 +105,7 @@ const COMPUTE_WGSL = /* wgsl */ `
       let isBoostStream = stream == 1u;
       let parkedHead = -9999.0;
 
-      // Handle boost stream seeding
+      // Boost just turned on: respawn the boost stream from above-screen.
       if (isBoostStream && params.boostStarted > 0.5) {
         let seed = vec2<f32>(f32(col) + frame * 7.0, f32(stream) + 100.0);
         trail = randomTrailLength(seed);
@@ -112,16 +114,13 @@ const COMPUTE_WGSL = /* wgsl */ `
         speed = randomSpeed(seed + vec2<f32>(5.0, 0.0));
       }
 
-      // Skip parked columns
       if (head <= parkedHead + 1.0) {
         columnState[index] = vec4<f32>(head, trail, phase, speed);
         continue;
       }
 
-      // Advance head
       head += speed * dt;
 
-      // Reset check: compute resetAfter from a stable hash
       let resetAfterSeed = vec2<f32>(f32(col) + phase * 10.0, f32(stream) + 50.0);
       let resetAfter = floor(randRange(resetAfterSeed, 12.0, 28.0));
 
@@ -133,7 +132,6 @@ const COMPUTE_WGSL = /* wgsl */ `
           phase = randRange(seed + vec2<f32>(4.0, 0.0), 0.0, 6.2832);
           speed = randomSpeed(seed + vec2<f32>(5.0, 0.0));
         } else {
-          // Park the boost column
           head = parkedHead;
           trail = 0.0;
           phase = 0.0;
@@ -152,44 +150,55 @@ interface GPUResources {
   device: GPUDevice
   stateBuffer: GPUBuffer
   paramsBuffer: GPUBuffer
-  readbackBuffer: GPUBuffer
   pipeline: GPUComputePipeline
   bindGroup: GPUBindGroup
+  textureGPU: GPUTexture
   cols: number
+  rowStrideEntries: number
+  bytesPerRow: number
 }
 
-function getGPUDevice(gl: THREE.WebGLRenderer): GPUDevice | null {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const renderer = gl as any
-  return renderer?.backend?.device ?? null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getRendererBackend(gl: any) {
+  return gl?.backend ?? null
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getGPUDevice(gl: any): GPUDevice | null {
+  return getRendererBackend(gl)?.device ?? null
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function getTextureGPU(gl: any, texture: THREE.Texture): GPUTexture | null {
+  const backend = getRendererBackend(gl)
+  if (!backend) return null
+  // initTexture forces the backend to allocate the GPUTexture if it doesn't
+  // exist yet, so the handle is available before the first render submits.
+  if (typeof gl.initTexture === 'function' && gl.hasInitialized?.()) {
+    gl.initTexture(texture)
+  }
+  return backend.get(texture)?.texture ?? null
 }
 
 async function createGPUResources(
   device: GPUDevice,
   cols: number,
-  rows: number,
+  textureGPU: GPUTexture,
   initialState: Float32Array,
+  rowStrideEntries: number,
 ): Promise<GPUResources> {
-  const entryCount = cols * STREAM_COUNT
-  const stateByteSize = entryCount * 4 * 4 // vec4<f32> per entry
+  const bufferEntries = rowStrideEntries * STREAM_COUNT
+  const stateByteSize = bufferEntries * ENTRY_BYTES
+  const bytesPerRow = rowStrideEntries * ENTRY_BYTES
 
-  // State buffer: read_write storage, seeded from CPU; COPY_SRC needed for readback
   const stateBuffer = device.createBuffer({
     size: stateByteSize,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
-    mappedAtCreation: false,
   })
-  device.queue.writeBuffer(stateBuffer, 0, initialState)
+  device.queue.writeBuffer(stateBuffer, 0, initialState as BufferSource)
 
-  // Persistent readback buffer — reused every frame to avoid per-frame allocation
-  const readbackBuffer = device.createBuffer({
-    size: stateByteSize,
-    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-  })
-
-  // Params uniform buffer
   const paramsBuffer = device.createBuffer({
-    size: 6 * 4, // 6 floats
+    size: 8 * 4,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
 
@@ -219,10 +228,20 @@ async function createGPUResources(
     ],
   })
 
-  return { device, stateBuffer, paramsBuffer, readbackBuffer, pipeline, bindGroup, cols }
+  return {
+    device,
+    stateBuffer,
+    paramsBuffer,
+    pipeline,
+    bindGroup,
+    textureGPU,
+    cols,
+    rowStrideEntries,
+    bytesPerRow,
+  }
 }
 
-function dispatchCompute(
+function dispatchComputeAndCopy(
   resources: GPUResources,
   dt: number,
   rows: number,
@@ -230,9 +249,11 @@ function dispatchCompute(
   boostStarted: boolean,
   frame: number,
 ) {
-  const { device, paramsBuffer, pipeline, bindGroup, cols } = resources
+  const {
+    device, paramsBuffer, pipeline, bindGroup, cols,
+    stateBuffer, textureGPU, rowStrideEntries, bytesPerRow,
+  } = resources
 
-  // Upload params
   const paramsData = new Float32Array([
     dt,
     rows,
@@ -240,39 +261,30 @@ function dispatchCompute(
     rainBoost ? 1 : 0,
     boostStarted ? 1 : 0,
     frame,
+    rowStrideEntries,
+    0,
   ])
-  device.queue.writeBuffer(paramsBuffer, 0, paramsData)
+  device.queue.writeBuffer(paramsBuffer, 0, paramsData as BufferSource)
 
-  // Dispatch
   const encoder = device.createCommandEncoder()
   const pass = encoder.beginComputePass()
   pass.setPipeline(pipeline)
   pass.setBindGroup(0, bindGroup)
   pass.dispatchWorkgroups(Math.ceil(cols / 64))
   pass.end()
+
+  // GPU-resident handoff: the same buffer the compute pass just wrote
+  // becomes the texture the fragment shader samples this frame.
+  encoder.copyBufferToTexture(
+    { buffer: stateBuffer, bytesPerRow, rowsPerImage: STREAM_COUNT },
+    { texture: textureGPU },
+    { width: cols, height: STREAM_COUNT, depthOrArrayLayers: 1 },
+  )
+
   device.queue.submit([encoder.finish()])
 }
 
-// Read state back to CPU for the DataTexture upload.
-// In Phase 4 this goes away — the vertex shader reads the storage buffer directly.
-async function readStateBack(
-  resources: GPUResources,
-  target: Float32Array,
-) {
-  const { device, stateBuffer, readbackBuffer } = resources
-  const byteSize = target.byteLength
-
-  const encoder = device.createCommandEncoder()
-  encoder.copyBufferToBuffer(stateBuffer, 0, readbackBuffer, 0, byteSize)
-  device.queue.submit([encoder.finish()])
-
-  await readbackBuffer.mapAsync(GPUMapMode.READ)
-  const mapped = new Float32Array(readbackBuffer.getMappedRange())
-  target.set(mapped)
-  readbackBuffer.unmap()
-}
-
-// ── Geometry / transforms (same as MatrixRainShader) ─────────────
+// ── Geometry / transforms ────────────────────────────────────────
 
 interface ColumnTransform {
   x: number
@@ -316,33 +328,49 @@ function createColumnTransforms(cols: number): ColumnTransform[] {
   return transforms
 }
 
-// ── Initial CPU seed (same logic as MatrixRainShader) ────────────
+// ── Initial CPU seed ─────────────────────────────────────────────
+//
+// Two contiguous arrays:
+//   - bufferData: padded layout for the GPU storage buffer.  Stream 1 starts
+//     at rowStrideEntries (not cols) so each row is 256-byte-aligned.
+//   - textureData: tightly-packed layout for the DataTexture's initial upload
+//     (Three.js ignores stride here — the texture is just cols × 2).
 
-function createInitialStateData(cols: number, rows: number): Float32Array {
-  const entryCount = cols * STREAM_COUNT
-  const data = new Float32Array(entryCount * 4)
+interface InitialState {
+  bufferData: Float32Array
+  textureData: Float32Array
+}
+
+function createInitialState(cols: number, rows: number, rowStrideEntries: number): InitialState {
+  const bufferData = new Float32Array(rowStrideEntries * STREAM_COUNT * 4)
+  const textureData = new Float32Array(cols * STREAM_COUNT * 4)
 
   for (let col = 0; col < cols; col++) {
-    // Stream 0: active
     const trail = Math.floor(rand(22, 38))
     const head = Math.floor(rand(-rows * 1.5 - trail, rows + trail))
     const phase = rand(0, Math.PI * 2)
     const speed = rand(10, 22)
-    const off0 = col * 4
-    data[off0] = head
-    data[off0 + 1] = trail
-    data[off0 + 2] = phase
-    data[off0 + 3] = speed
 
-    // Stream 1: parked
-    const off1 = (cols + col) * 4
-    data[off1] = PARKED_HEAD
-    data[off1 + 1] = 0
-    data[off1 + 2] = 0
-    data[off1 + 3] = 0
+    const bufOff0 = col * 4
+    bufferData[bufOff0] = head
+    bufferData[bufOff0 + 1] = trail
+    bufferData[bufOff0 + 2] = phase
+    bufferData[bufOff0 + 3] = speed
+
+    const bufOff1 = (rowStrideEntries + col) * 4
+    bufferData[bufOff1] = PARKED_HEAD
+
+    const texOff0 = col * 4
+    textureData[texOff0] = head
+    textureData[texOff0 + 1] = trail
+    textureData[texOff0 + 2] = phase
+    textureData[texOff0 + 3] = speed
+
+    const texOff1 = (cols + col) * 4
+    textureData[texOff1] = PARKED_HEAD
   }
 
-  return data
+  return { bufferData, textureData }
 }
 
 // ── Component ────────────────────────────────────────────────────
@@ -370,7 +398,6 @@ export default function MatrixRainCompute({
   const previousBoostRef = useRef(false)
   const frameRef = useRef(0)
   const gpuRef = useRef<GPUResources | null>(null)
-  const initRef = useRef(false)
 
   const grid = useMemo(() => {
     const rows = Math.max(30, getRowsForTier(qualityTier) + Math.round(densityOffset / 4))
@@ -391,15 +418,14 @@ export default function MatrixRainCompute({
   const geometry = useMemo(() => createColumnGeometry(grid.cols), [grid.cols])
   const columnTransforms = useMemo(() => createColumnTransforms(grid.cols), [grid.cols])
 
-  // CPU-side state data for initial seeding and DataTexture bridge
-  const stateData = useMemo(
-    () => createInitialStateData(grid.cols, grid.rows),
+  const initialState = useMemo(
+    () => createInitialState(grid.cols, grid.rows, getRowStrideEntries(grid.cols)),
     [grid.cols, grid.rows],
   )
 
   const stateTexture = useMemo(() => {
     const texture = new THREE.DataTexture(
-      stateData,
+      initialState.textureData,
       grid.cols,
       STREAM_COUNT,
       THREE.RGBAFormat,
@@ -412,7 +438,7 @@ export default function MatrixRainCompute({
     texture.generateMipmaps = false
     texture.needsUpdate = true
     return texture
-  }, [stateData, grid.cols])
+  }, [initialState, grid.cols])
 
   const material = useMemo(() => new THREE.ShaderMaterial({
     vertexShader: VS,
@@ -439,36 +465,49 @@ export default function MatrixRainCompute({
     side: THREE.DoubleSide,
   }), [atlas, grid.cols, grid.rows, palette, stateTexture])
 
-  // Initialize GPU compute resources
   useEffect(() => {
     const device = getGPUDevice(gl)
     if (!device) return
 
     let cancelled = false
 
-    createGPUResources(device, grid.cols, grid.rows, stateData).then((resources) => {
+    const init = async () => {
+      // Force Three.js to allocate the texture's backing GPUTexture so we can
+      // copy into it directly from the compute storage buffer.
+      const textureGPU = getTextureGPU(gl, stateTexture)
+      if (!textureGPU) {
+        console.warn('MatrixRainCompute: GPUTexture handle unavailable; compute pass disabled.')
+        return
+      }
+
+      const rowStrideEntries = getRowStrideEntries(grid.cols)
+      const resources = await createGPUResources(
+        device,
+        grid.cols,
+        textureGPU,
+        initialState.bufferData,
+        rowStrideEntries,
+      )
       if (cancelled) {
         resources.stateBuffer.destroy()
         resources.paramsBuffer.destroy()
         return
       }
       gpuRef.current = resources
-      initRef.current = true
-    })
+    }
+
+    init()
 
     return () => {
       cancelled = true
       if (gpuRef.current) {
         gpuRef.current.stateBuffer.destroy()
         gpuRef.current.paramsBuffer.destroy()
-        gpuRef.current.readbackBuffer.destroy()
         gpuRef.current = null
       }
-      initRef.current = false
     }
-  }, [gl, grid.cols, grid.rows, stateData])
+  }, [gl, grid.cols, grid.rows, initialState, stateTexture])
 
-  // Set up instance matrices
   useLayoutEffect(() => {
     const mesh = meshRef.current
     if (!mesh) return
@@ -491,7 +530,6 @@ export default function MatrixRainCompute({
     mesh.instanceMatrix.needsUpdate = true
   }, [columnTransforms, grid.cols])
 
-  // Sync palette colors
   useEffect(() => {
     material.uniforms.uHeadColor.value.setRGB(...palette.headColor)
     material.uniforms.uTrailColor.value.setRGB(...palette.trailColor)
@@ -499,7 +537,6 @@ export default function MatrixRainCompute({
     material.uniforms.uFogColor.value.set(palette.fog)
   }, [material, palette])
 
-  // Arrow key density control
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.repeat) return
@@ -513,7 +550,6 @@ export default function MatrixRainCompute({
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  // Cleanup
   useEffect(() => () => { atlas.dispose(); geometry.dispose() }, [atlas, geometry])
   useEffect(() => () => { stateTexture.dispose() }, [stateTexture])
   useEffect(() => () => { material.dispose() }, [material])
@@ -526,19 +562,12 @@ export default function MatrixRainCompute({
 
     const gpu = gpuRef.current
     if (gpu) {
-      // GPU compute path — dispatch simulation, then read back for DataTexture
-      dispatchCompute(gpu, cappedDt, grid.rows, rainBoost, boostStarted, frameRef.current)
-
-      // Async readback — updates the DataTexture one frame behind.
-      // This is the Phase 2/3 bridge; Phase 4 eliminates this entirely.
-      readStateBack(gpu, stateData).then(() => {
-        stateTexture.needsUpdate = true
-      })
+      dispatchComputeAndCopy(gpu, cappedDt, grid.rows, rainBoost, boostStarted, frameRef.current)
 
       onPerfStats?.({
         activeColumns: rainBoost ? grid.cols * STREAM_COUNT : grid.cols,
         activeInstances: grid.cols,
-        uploadedBytesPerFrame: 0, // compute is GPU-resident
+        uploadedBytesPerFrame: 0,
         qualityTier,
       })
     }
