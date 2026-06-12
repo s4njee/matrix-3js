@@ -7,7 +7,7 @@ import {
   SHARED_FX_DATABEND,
   isEditableTarget,
   type SharedSpecialEffectState,
-} from '../../../../src/shared/special-effects/index.ts'
+} from '../shared/special-effects/index.ts'
 import {
   MATRIX_PALETTE_PRESETS,
   type MatrixEffectSettings,
