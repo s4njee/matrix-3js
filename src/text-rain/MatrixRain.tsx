@@ -32,6 +32,21 @@ for (let i = 0; i < SIN_TABLE_SIZE; i++) {
 }
 const sinLUT = (x: number) => SIN_TABLE[Math.floor(((x % (Math.PI * 2)) / (Math.PI * 2)) * SIN_TABLE_SIZE) & (SIN_TABLE_SIZE - 1)]
 
+// ── Glyph "aliveness" config ──────────────────────────────────────
+// Additive glow emitted by the leading glyphs (age 0..2). This is added on
+// top of normal compositing so it feeds the bloom pass for a glow-from-within
+// head, while trail cells (glow 0) keep crisp normal-blended edges.
+const HEAD_GLOW = 0.85
+const GLOW_FALLOFF = [1, 0.5, 0.22]
+const GLOW_AGE_SPAN = GLOW_FALLOFF.length
+// Subtle per-cell brightness shimmer.
+const FLICKER_SPEED = 9
+const FLICKER_DEPTH = 0.12
+const GOLDEN_TURN = 0.6180339887 * Math.PI * 2
+// Per-column ignition flash: spikes to 1 when a new head lights, then decays,
+// so the leading edge pulses brighter at the moment it advances.
+const FLASH_DECAY_RATE = 6
+
 // ── Build font atlas texture (runs once) ──────────────────────────
 function buildAtlas(): THREE.CanvasTexture {
   const w = ATLAS_COLS * CELL_PX
@@ -66,18 +81,21 @@ const VS = /* glsl */ `
   attribute vec2  aUvOff;
   attribute vec3  aCol;
   attribute float aOpa;
+  attribute float aGlow;
 
   varying vec2  vUv;
   varying vec3  vCol;
   varying float vOpa;
+  varying float vGlow;
 
   uniform float uAC; // atlas cols
   uniform float uAR; // atlas rows
 
   void main() {
-    vCol = aCol;
-    vOpa = aOpa;
-    vUv  = uv / vec2(uAC, uAR) + aUvOff;
+    vCol  = aCol;
+    vOpa  = aOpa;
+    vGlow = aGlow;
+    vUv   = uv / vec2(uAC, uAR) + aUvOff;
     gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
   }
 `
@@ -87,11 +105,17 @@ const FS = /* glsl */ `
   varying vec2  vUv;
   varying vec3  vCol;
   varying float vOpa;
+  varying float vGlow;
 
   void main() {
     float a = texture2D(uAtlas, vUv).r;
     if (a < 0.08 || vOpa < 0.001) discard;
-    gl_FragColor = vec4(vCol, a * vOpa);
+    float alpha = a * vOpa;
+    // Premultiplied-alpha output. The base term occludes the background
+    // normally (matching the old NormalBlending look for trail cells), while
+    // the glow term is added on top without occluding so bright heads bloom.
+    vec3 rgb = vCol * alpha + vCol * (a * vGlow);
+    gl_FragColor = vec4(rgb, alpha);
   }
 `
 
@@ -106,6 +130,7 @@ interface SimulationState {
   trail: Uint8Array
   resetAfter: Uint16Array
   acc: Float32Array
+  flash: Float32Array
   cellOn: Uint8Array
   cellAge: Uint8Array
   cellChar: Uint8Array
@@ -179,6 +204,7 @@ function createSimulationState(): SimulationState {
     trail: new Uint8Array(COLUMN_COUNT),
     resetAfter: new Uint16Array(COLUMN_COUNT),
     acc: new Float32Array(COLUMN_COUNT),
+    flash: new Float32Array(COLUMN_COUNT),
     cellOn: new Uint8Array(MAX_INSTANCES),
     cellAge: new Uint8Array(MAX_INSTANCES),
     cellChar: new Uint8Array(MAX_INSTANCES),
@@ -214,6 +240,7 @@ function clampActiveColumnCount(nextCount: number) {
 function writeHiddenInstance(
   matrixArray: Float32Array,
   opacityArray: Float32Array,
+  glowArray: Float32Array,
   index: number,
 ) {
   const off = index * 16
@@ -221,6 +248,7 @@ function writeHiddenInstance(
   matrixArray.fill(0, off, off + 16)
   matrixArray[off + 15] = 1
   opacityArray[index] = 0
+  glowArray[index] = 0
 }
 
 function writeVisibleInstanceMatrix(
@@ -261,13 +289,17 @@ function writeCellAtlasOffset(
   uvArray[index * 2 + 1] = 1 - (atlasRow + 1) / ATLAS_ROWS
 }
 
-function writeCellColorAndOpacity(
+function writeCellAppearance(
   colorArray: Float32Array,
   opacityArray: Float32Array,
+  glowArray: Float32Array,
   index: number,
+  cellIndex: number,
   age: number,
   trail: number,
   palette: MatrixPalette,
+  t: number,
+  flash: number,
 ) {
   const fade = 1 - age / trail
   const trailColor = palette.trailColor
@@ -283,7 +315,17 @@ function writeCellColorAndOpacity(
     colorArray[index * 3 + 2] = dimTrailColor[2] + (trailColor[2] - dimTrailColor[2]) * fade
   }
 
-  opacityArray[index] = 0.16 + fade * 0.84
+  // Subtle per-cell shimmer: a stable phase keyed off the cell index keeps each
+  // glyph oscillating out of sync with its neighbours.
+  const flickPhase = (cellIndex & 1023) * GOLDEN_TURN
+  const flicker = 1 - FLICKER_DEPTH * (0.5 - 0.5 * sinLUT(t * FLICKER_SPEED + flickPhase))
+  opacityArray[index] = (0.16 + fade * 0.84) * flicker
+
+  // Leading edge (age 0..2) emits additive glow, pulsed brighter by the
+  // column's ignition flash so the head visibly flares as it advances.
+  glowArray[index] = age < GLOW_AGE_SPAN
+    ? HEAD_GLOW * GLOW_FALLOFF[age] * (0.55 + 0.45 * flash)
+    : 0
 }
 
 // ── Component ─────────────────────────────────────────────────────
@@ -310,6 +352,7 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
     uv:  new Float32Array(MAX_INSTANCES * 2),
     col: new Float32Array(MAX_INSTANCES * 3),
     opa: new Float32Array(MAX_INSTANCES),
+    glo: new Float32Array(MAX_INSTANCES),
   }), [])
 
   const material = useMemo(() => new THREE.ShaderMaterial({
@@ -323,6 +366,12 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
     transparent: true,
     depthWrite: false,
     side: THREE.DoubleSide,
+    // Premultiplied-alpha blending so the shader's additive glow term lights up
+    // the head without occluding what's behind it.
+    blending: THREE.CustomBlending,
+    blendEquation: THREE.AddEquation,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
   }), [atlas])
 
   const geometry = useMemo(() => {
@@ -330,6 +379,7 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
     g.setAttribute('aUvOff', new THREE.InstancedBufferAttribute(bufs.uv, 2))
     g.setAttribute('aCol',   new THREE.InstancedBufferAttribute(bufs.col, 3))
     g.setAttribute('aOpa',   new THREE.InstancedBufferAttribute(bufs.opa, 1))
+    g.setAttribute('aGlow',  new THREE.InstancedBufferAttribute(bufs.glo, 1))
     return g
   }, [bufs])
 
@@ -381,7 +431,7 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
     const cappedDt = Math.min(dt, MAX_SIMULATION_DT)
     timeRef.current += cappedDt
     const t = timeRef.current
-    const { uv, col, opa } = bufs
+    const { uv, col, opa, glo } = bufs
     const {
       x,
       z,
@@ -392,6 +442,7 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
       trail,
       resetAfter,
       acc,
+      flash,
       cellOn,
       cellAge,
       cellChar,
@@ -413,6 +464,7 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
     const uvAttr = geometry.getAttribute('aUvOff') as THREE.InstancedBufferAttribute
     const colAttr = geometry.getAttribute('aCol') as THREE.InstancedBufferAttribute
     const opaAttr = geometry.getAttribute('aOpa') as THREE.InstancedBufferAttribute
+    const gloAttr = geometry.getAttribute('aGlow') as THREE.InstancedBufferAttribute
 
     // Only the active prefix is rendered, so the instanced mesh count follows
     // the selected density instead of drawing the full backing buffer.
@@ -448,6 +500,8 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
           cellOn[headCellIndex] = 1
           cellAge[headCellIndex] = 0
           cellChar[headCellIndex] = pickIdx()
+          // Re-ignite the leading-edge flash each time the head steps down.
+          flash[columnIndex] = 1
         }
 
         // Only scramble glyphs when the head actually advances so we avoid
@@ -464,6 +518,13 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
         }
       }
 
+      // Decay the ignition flash toward 0 so the leading-edge pulse fades
+      // between head steps. Clamp keeps it from going negative under big dt.
+      const columnFlash = flash[columnIndex]
+      flash[columnIndex] = columnFlash > 0
+        ? Math.max(0, columnFlash - cappedDt * FLASH_DECAY_RATE)
+        : 0
+
       // Write the visible slice for this column into the instanced buffers.
       const cx = x[columnIndex] + sinLUT(t * 0.25 + phase[columnIndex]) * 0.03
       const s = size[columnIndex]
@@ -472,11 +533,11 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
         const cellIndex = columnStart + rowIndex
 
         if (!cellOn[cellIndex]) {
-          writeHiddenInstance(matArr, opa, idx)
+          writeHiddenInstance(matArr, opa, glo, idx)
         } else {
           writeVisibleInstanceMatrix(matArr, idx, s, cx, BASE_Y - rowIndex * ROW_SPACING, z[columnIndex])
           writeCellAtlasOffset(uv, idx, cellChar[cellIndex])
-          writeCellColorAndOpacity(col, opa, idx, cellAge[cellIndex], trail[columnIndex], palette)
+          writeCellAppearance(col, opa, glo, idx, cellIndex, cellAge[cellIndex], trail[columnIndex], palette, t, columnFlash)
         }
         idx += 1
       }
@@ -499,6 +560,10 @@ export default function MatrixRain({ palette, rainBoost = false }: MatrixRainPro
     opaAttr.clearUpdateRanges()
     opaAttr.addUpdateRange(0, activeInstances)
     opaAttr.needsUpdate = true
+
+    gloAttr.clearUpdateRanges()
+    gloAttr.addUpdateRange(0, activeInstances)
+    gloAttr.needsUpdate = true
   })
 
   return (
