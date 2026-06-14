@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { MatrixPalette } from './matrix-effects-config'
-import { useFrameRate } from '../../../../src/shared/performance/index.ts'
+import { useFrameRate } from '../shared/performance/index.ts'
 
 // ── Character set & atlas config ──────────────────────────────────
 const CHARS =

@@ -28,8 +28,10 @@ body {
 }
 
 .matrix-status-chip {
+  position: absolute;
   top: 1rem;
   left: 1rem;
+  z-index: 15;
   display: flex;
   gap: 0.9rem;
   align-items: center;
@@ -37,8 +39,10 @@ body {
   border-radius: 999px;
   background: rgba(1, 6, 2, 0.72);
   padding: 0.65rem 0.95rem;
+  font-size: 0.82rem;
   color: rgba(215, 255, 224, 0.88);
   backdrop-filter: blur(16px);
+  user-select: none;
 }
 
 .matrix-status-chip span:last-child {

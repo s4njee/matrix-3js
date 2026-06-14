@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react'
-import { useFrame, useThree } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import '../index.css'
 import MatrixRain from './MatrixRain'
@@ -16,8 +15,8 @@ import {
   createSharedSpecialEffectHandlers,
   isEditableTarget,
   type SharedSpecialEffectState,
-} from '../../../../src/shared/special-effects/index.ts'
-import SafeCanvas from '../../../../src/shared/webgl/SafeCanvas.tsx'
+} from '../shared/special-effects/index.ts'
+import SafeCanvas from '../shared/webgl/SafeCanvas.tsx'
 
 const MATRIX_SHELL_STYLE = {
   position: 'absolute',
